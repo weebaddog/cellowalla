@@ -75,6 +75,15 @@ the connection isn't private; that's expected (the box made its own certificate)
 Choose Advanced, then Continue.
 
 
+UPDATES AND BACKUP
+------------------
+- The box and the apps update themselves (only with versions signed by Cellowalla's owner).
+  Turn this off or on in the dashboard: Settings > Box updates, and Settings > This app.
+- Back up the box once it's set up: Settings > Backup > Download backup. Keep the file
+  somewhere private. If the box's memory card ever fails, install Cellowalla on a new card
+  and use Settings > Backup > Restore from a file.
+
+
 IF SOMETHING GOES WRONG
 -----------------------
 - Forgot the password: on the box, run   sudo cellowalla-reset-password

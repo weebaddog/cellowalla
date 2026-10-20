@@ -10,3 +10,4 @@ android/keystore.properties
 *.jks
 *.keystore
 dist/
+desktop/dist-linux/
