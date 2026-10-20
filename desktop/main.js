@@ -313,7 +313,21 @@ ipcMain.handle("cellowalla:find", async () => {
   return { found, nets: localNets() };
 });
 
+// Problems in this app go to the box (it emails the owner); kept and sent later when the box can't be reached.
+const pendingReports = () => path.join(app.getPath("userData"), "pending-reports.json");
+async function reportProblem(kind, message, detail = "") {
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(pendingReports(), "utf8")); } catch { /* none */ }
+  if (kind) list.push({ source: "desktop", kind, message: String(message).slice(0, 500), detail: String(detail).slice(0, 6000), device: `Cellowalla desktop · ${process.platform === "win32" ? "Windows" : "Linux"} ${os.release()}`, version: app.getVersion() });
+  const left = [];
+  for (const r of list.slice(-20)) { try { await api("POST", "/api/report", r); } catch (e) { if (!/HTTP 429/.test(e.message)) left.push(r); } }
+  try { if (left.length) fs.writeFileSync(pendingReports(), JSON.stringify(left)); else fs.rmSync(pendingReports(), { force: true }); } catch { /* full disk */ }
+}
+process.on("uncaughtException", (e) => { reportProblem("app error", e.message, e.stack).catch(() => {}); });
+process.on("unhandledRejection", (e) => { reportProblem("app error", e?.message || String(e), e?.stack || "").catch(() => {}); });
+
 app.whenReady().then(() => {
+  setTimeout(() => reportProblem(null).catch(() => {}), 30_000); // (any saved from last time)
   if (process.platform === "win32") app.setAppUserModelId("com.cellowalla.desktop");
   trustBox();
   nativeTheme.themeSource = config.theme === "light" || config.theme === "dark" ? config.theme : "system";

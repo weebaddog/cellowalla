@@ -379,6 +379,25 @@ await test("updates: only a version signed with the release key, and only a matc
   assert.equal(app.store.data.updates.auto, false);
 });
 
+await test("problem reports: from any app, repeats counted, people's own emailed at once, password never shown", async () => {
+  const sent = [];
+  app.reports = (await import("../src/reports.js")).createReports({ store: app.store, dir, version: "test", log: () => {}, send: async (cfg, subject, text) => { sent.push({ cfg, subject, text }); } });
+  const open = (b) => fetch(`http://127.0.0.1:${WEB}/api/report`, { method: "POST", headers: { "content-type": "application/json", "x-cellowalla": "1" }, body: JSON.stringify(b) });
+  for (let i = 0; i < 2; i++) assert.equal((await open({ source: "android", kind: "crash", message: "NullPointerException" })).status, 200);
+  let r = (await call("GET", "/api/reports")).body;
+  assert.equal(r.reports.length, 1); assert.equal(r.reports[0].count, 2); assert.equal(r.mail.hasPass, false);
+  assert.equal((await call("PUT", "/api/reports", { to: "not an email" })).status, 400);
+  await call("PUT", "/api/reports", { to: "owner@test.dev", user: "me@test.dev", pass: "abcd efgh ijkl mnop" });
+  await open({ source: "dashboard", kind: "user", message: "Shield blocked my bank" });
+  for (let i = 0; i < 20 && !sent.length; i++) await new Promise((x) => setTimeout(x, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].cfg.pass, "abcdefghijklmnop");
+  assert.match(sent[0].text, /Someone reported a problem in dashboard/); assert.match(sent[0].text, /NullPointerException \(2 times\)|crash in android \(2 times\)/);
+  r = (await call("GET", "/api/reports")).body;
+  assert.ok(r.reports.every((x) => x.sent)); assert.equal(JSON.stringify(r).includes("abcdefghijklmnop"), false);
+  const backup = (await call("GET", "/api/backup")).body;
+  assert.equal(JSON.stringify(backup).includes("abcdefghijklmnop"), false, "the App Password never goes into a backup");
+});
 await test("status adds it all up; state survives a restart", async () => {
   const s = (await call("GET", "/api/status")).body;
   assert.ok(s.shield.lookups > 10 && s.shield.blocked > 5 && s.devices.total >= 2);

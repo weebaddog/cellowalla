@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         box = Box(this)
+        catchCrashes()
         root = FrameLayout(this)
         // Android 15+ draws apps edge to edge: keep clear of the status bar, title bar, keyboard and gesture bar.
         val tv = android.util.TypedValue()
@@ -363,6 +364,27 @@ class MainActivity : Activity() {
     }
 
     // ---- menu ----------------------------------------------------------------------------------------
+
+    /** A crash is written down as the app closes, and sent to the box (which emails the owner) the next time it opens. */
+    private fun catchCrashes() {
+        val file = java.io.File(filesDir, "crash.txt")
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching { file.writeText("${e.javaClass.name}: ${e.message}\n${android.util.Log.getStackTraceString(e)}") }
+            previous?.uncaughtException(t, e)
+        }
+        if (file.exists() && box.url.isNotEmpty()) {
+            val text = runCatching { file.readText() }.getOrDefault("")
+            Thread {
+                val sent = runCatching {
+                    box.call("POST", "/api/report", org.json.JSONObject().put("source", "android").put("kind", "crash").put("message", text.lineSequence().firstOrNull() ?: "The app crashed")
+                        .put("detail", text.take(6000)).put("device", "Android · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
+                        .put("version", packageManager.getPackageInfo(packageName, 0).versionName).toString())
+                }.isSuccess
+                if (sent) file.delete()
+            }.start()
+        }
+    }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Reload")

@@ -42,6 +42,7 @@ export const DEFAULTS = () => ({
     publicKey: "",
     passes: [],                   // [{ id, name, ip, publicKey, privateKey, full, createdAt }]
   },
+  reportsMail: {},               // problem reports: { to, user, pass (App Password), host, port, off, lastError }
   pings: {
     ntfy: "",                     // e.g. https://ntfy.sh/my-secret-topic
     webhook: "",

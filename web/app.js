@@ -651,6 +651,57 @@ function backupCard() {
     h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: save }, "Download backup"), h("button", { class: "btn", onclick: () => pick.click() }, "Restore from a file…"), pick));
 }
 
+// ---- Problem reports: errors go to the box (it emails the owner); people can describe a glitch -----
+
+const reportApp = window.CellowallaApp ? "android" : window.cellowallaDesktop ? "desktop" : "dashboard";
+const reportedHere = new Set();
+function reportProblem(kind, message, detail = "") {
+  const key = `${kind}|${message}`;
+  if (kind !== "user" && reportedHere.has(key)) return Promise.resolve();
+  reportedHere.add(key);
+  return fetch("/api/report", { method: "POST", headers: { "content-type": "application/json", "x-cellowalla": "1" }, credentials: "same-origin",
+    body: JSON.stringify({ source: reportApp, kind, message: String(message).slice(0, 500), detail: `${detail}\n${location.hash || ui.tab}\n${navigator.userAgent}`.slice(0, 6000), device: reportApp }) }).catch(() => {});
+}
+window.addEventListener("error", (e) => { if (e.message && !/ResizeObserver/.test(e.message)) reportProblem("dashboard error", e.message, `${e.filename}:${e.lineno}\n${e.error?.stack || ""}`); });
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason;
+  if (r?.message === "Sign in" || /Failed to fetch|NetworkError|Load failed/.test(String(r?.message))) return;
+  reportProblem("dashboard error", r?.message || String(r), r?.stack || "");
+});
+
+function reportSheet() {
+  sheet("Report a problem", (b, close) => {
+    const what = h("textarea", { placeholder: "What happened? What were you doing?", rows: "5" });
+    b.append(h("p", { class: "muted" }, "Sent to the box's owner by email, with the screen you're on and this device's type."), what,
+      h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: async () => { if (!what.value.trim()) return what.focus(); await reportProblem("user", what.value.trim()); close(); toast("Thanks, your report was sent."); } }, "Send report")));
+  });
+}
+
+/** Settings → Problem reports: where the emails go (through the owner's own Gmail App Password). */
+async function reportsCard() {
+  const r = await api("GET", "/api/reports").catch(() => null);
+  if (!r) return null;
+  const m = r.mail;
+  const to = h("input", { type: "text", value: m.to, placeholder: "you@gmail.com" });
+  const user = h("input", { type: "text", value: m.user, placeholder: "the Gmail account that sends them" });
+  const pass = h("input", { type: "password", placeholder: m.hasPass ? "Saved (type a new one to replace it)" : "16-letter App Password from Google", autocomplete: "new-password" });
+  const save = () => api("PUT", "/api/reports", { to: to.value, user: user.value, ...(pass.value ? { pass: pass.value } : {}) });
+  return h("div", { class: "card" }, h("h2", {}, "Problem reports"),
+    h("p", { class: "muted" }, "Errors and crashes from the box and every Cellowalla app (and anything sent with “Report a problem”) are emailed to you. Repeats are counted, not resent."),
+    h("label", { class: "field" }, h("span", {}, "Send them to"), to),
+    h("label", { class: "field" }, h("span", {}, "Send from (Gmail account)"), user),
+    h("label", { class: "field" }, h("span", {}, "App Password for that account"), pass),
+    h("p", { class: "muted" }, "Make one at myaccount.google.com → Security → 2-Step Verification → App passwords. Your normal password won't work."),
+    h("div", { class: "row" }, h("div", { class: "grow" }, h("div", {}, "Pause the emails")), toggle(m.off, (v) => api("PUT", "/api/reports", { off: v }), "Pause the emails")),
+    m.lastError ? h("div", { class: "note warn" }, `Last email failed: ${m.lastError.message}`) : null,
+    h("div", { class: "btns" },
+      h("button", { class: "btn primary", onclick: () => act(async () => { await save(); draw(); }, "Saved") }, "Save"),
+      h("button", { class: "btn", onclick: () => act(async () => { await save(); await api("POST", "/api/reports/test"); }, "Test email sent") }, "Send a test email"),
+      h("button", { class: "btn", onclick: reportSheet }, "Report a problem")),
+    r.reports.length ? h("div", {}, r.reports.slice(0, 15).map((x) => h("div", { class: "row" }, h("div", { class: "grow" }, h("div", {}, x.message),
+      h("div", { class: "sub" }, `${x.source} · ${x.kind}${x.count > 1 ? ` · ${x.count} times` : ""} · ${ago(x.last)}${x.sent ? " · emailed" : ""}`))))) : h("p", { class: "muted" }, "No problems reported yet."));
+}
+
 async function settingsScreen() {
   const [s, u] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/updates")]);
   const cur = h("input", { type: "password", autocomplete: "current-password" }), pw = h("input", { type: "password", autocomplete: "new-password" });
@@ -667,6 +718,7 @@ async function settingsScreen() {
       h("div", { class: "inline" }, homeDns, h("button", { class: "btn", onclick: () => act(() => api("PUT", "/api/settings", { homeDns: homeDns.value }), "Saved") }, "Save"))) : null,
     updatesCard(u),
     appUpdatesCard(),
+    await reportsCard(),
     backupCard(),
     h("div", { class: "card" }, h("h2", {}, "Appearance"),
       h("p", { class: "muted" }, "Auto follows this device's own light or dark setting."), themeChips()),

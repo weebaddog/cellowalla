@@ -58,7 +58,13 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       dns, traffic: d.ip ? app.gate.traffic(d.ip) : null };
   }
 
+  const reportsFrom = new Map(); // ip → [times]: at most 30 problem reports an hour from one address
+
   const routes = {
+    // Problem reports: the list, and where they're emailed.
+    "GET /api/reports": () => ({ reports: app.reports.list(), mail: app.reports.settings() }),
+    "PUT /api/reports": (b) => { app.reports.save(b); return { mail: app.reports.settings() }; },
+    "POST /api/reports/test": async () => { await app.reports.test(); return { ok: true }; },
     "GET /api/status": () => {
       const data = store.data;
       const devices = Object.values(data.devices);
@@ -248,7 +254,7 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
     // Backup: everything the box remembers, as one file the owner keeps. Restoring it on a new box
     // (after a dead SD card) brings back devices, House Rules, Tunnel passes and the password; the
     // new box keeps its own mode and network ports, which its installer set up.
-    "GET /api/backup": () => ({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: store.data }),
+    "GET /api/backup": () => ({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: { ...store.data, reportsMail: { ...store.data.reportsMail, pass: undefined } } }), // (never the mail App Password)
     "POST /api/backup/restore": async (b) => {
       const st = b.backup?.state;
       if (b.backup?.kind !== "cellowalla-backup" || !st || typeof st !== "object" || Array.isArray(st)) throw fail(400, "That isn't a Cellowalla backup file");
@@ -261,7 +267,7 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       }
       if (!st.admin?.salt || !st.admin?.hash) throw fail(400, "That backup has no password in it");
       const next = merge(base, st);
-      const here = { mode: store.data.mode, net: { ...store.data.net, homeDns: typeof next.net.homeDns === "string" ? next.net.homeDns : "" } };
+      const here = { mode: store.data.mode, net: { ...store.data.net, homeDns: typeof next.net.homeDns === "string" ? next.net.homeDns : "" }, reportsMail: { ...next.reportsMail, pass: store.data.reportsMail?.pass } };
       store.change("restore", (s) => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, next, here, { traffic: {} }); });
       store.flush();
       sessions.clear(); // sign in again, with the backup's password
@@ -336,6 +342,15 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
         startSession(res, secure);
         return send(res, 200, { ok: true });
       }
+      // A problem from the dashboard or a Cellowalla app (also before signing in: a crash can happen on the way).
+      if (url.pathname === "/api/report" && req.method === "POST") {
+        const list = (reportsFrom.get(ip) || []).filter((t) => Date.now() - t < 3600_000);
+        if (list.length >= 30) throw fail(429, "Too many reports");
+        list.push(Date.now()); reportsFrom.set(ip, list);
+        const b = await readJson(req);
+        app.reports?.add(b, b.kind === "user");
+        return send(res, 200, { ok: true });
+      }
       if (url.pathname === "/api/logout" && req.method === "POST") {
         const m = String(req.headers.cookie || "").match(/(?:^|;\s*)cw=([A-Za-z0-9_-]+)/);
         if (m) sessions.delete(tokenKey(m[1]));
@@ -349,7 +364,10 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       const body = req.method === "GET" ? {} : await readJson(req, url.pathname === "/api/backup/restore" ? 16 << 20 : 65536);
       return send(res, 200, await route(body, url));
     } catch (e) {
-      if (!e.status) log(`[web] ${req.method} ${url.pathname}: ${e.stack || e.message}`);
+      if (!e.status) {
+        log(`[web] ${req.method} ${url.pathname}: ${e.stack || e.message}`);
+        app.reports?.add({ source: "box", kind: "box error", message: `${req.method} ${url.pathname}: ${e.message}`, detail: e.stack, version: app.version });
+      }
       return send(res, e.status || 500, { error: e.status ? e.message : "Something went wrong on the box" });
     }
   }

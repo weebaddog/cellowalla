@@ -19,6 +19,7 @@ import { createTunnel } from "./tunnel.js";
 import { createPings } from "./pings.js";
 import { createWeb } from "./web.js";
 import { createUpdater } from "./update.js";
+import { createReports } from "./reports.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
@@ -68,6 +69,7 @@ export async function createApp({ dataDir, fetchImpl = fetch, log = console.log,
   app.gate = createGate({ store, sys, log, onBedtime: (c, on) => app.pings.send("bedtime", on ? `Bedtime started for ${c.name}.` : `Bedtime is over for ${c.name}.`, { ref: c.id }) });
   app.tunnel = createTunnel({ store, sys, fetchImpl, log, onConnect: (p, l) => app.pings.send("tunnel", `${p.name} connected through the Tunnel${l?.endpoint ? ` from ${l.endpoint.replace(/:\d+$/, "")}` : ""}.`, { ref: p.id, once: `tn:${p.id}` }) });
 
+  app.reports = createReports({ store, dir: dataDir, version: VERSION, log });
   app.updater = createUpdater({ store, version: VERSION, dataDir, sys, fetchImpl, log, pings: app.pings, ...update });
 
   let refreshing = null;
@@ -97,7 +99,7 @@ export async function createApp({ dataDir, fetchImpl = fetch, log = console.log,
     stopUpdates = app.updater.start();
   };
   let stopUpdates = () => {};
-  app.stop = () => { for (const t of timers) clearInterval(t); stopUpdates(); app.shield.close(); app.web?.close(); store.flush(); app.pings.flush(); };
+  app.stop = () => { for (const t of timers) clearInterval(t); stopUpdates(); app.shield.close(); app.web?.close(); store.flush(); app.pings.flush(); app.reports.flushFeed(); };
   return app;
 }
 
