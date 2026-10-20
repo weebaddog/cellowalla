@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Cellowalla</title>
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <main>
+    <img src="icon.png" alt="" width="72" height="72">
+    <h1>Connect to your Cellowalla box</h1>
+    <p class="muted">Type the address the installer showed, for example <code>192.168.1.50</code>, or <code>cellowalla.lan</code> if your devices already use the box.</p>
+    <p id="error" class="error" role="alert"></p>
+    <form id="form">
+      <input id="address" type="text" placeholder="192.168.1.50" autocomplete="off" spellcheck="false" autofocus>
+      <button type="submit">Connect</button>
+    </form>
+    <div class="chips"><button type="button" class="chip" data-a="cellowalla.lan">cellowalla.lan</button><button type="button" class="chip" data-a="192.168.50.1">192.168.50.1 (gatekeeper)</button></div>
+    <p class="muted small">Don't have a box yet? Cellowalla runs on a Raspberry Pi or any small Linux computer. See the user guide in the cellowalla folder (web/guide.html).</p>
+  </main>
+  <script src="setup.js"></script>
+</body>
+</html>

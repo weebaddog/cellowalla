@@ -1,0 +1,42 @@
+{
+  "name": "cellowalla-desktop",
+  "productName": "Cellowalla",
+  "version": "0.1.0",
+  "description": "Cellowalla for Windows and Linux: your box's dashboard, tray and notifications",
+  "author": "Cellowalla <90303180+weebaddog@users.noreply.github.com>",
+  "homepage": "https://github.com/weebaddog/cellowalla",
+  "license": "MIT",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage deb"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.cellowalla.desktop",
+    "productName": "Cellowalla",
+    "files": ["main.js", "preload.js", "setup.html", "setup.js", "setup.css", "icon.png"],
+    "directories": { "output": "dist" },
+    "win": { "target": "nsis", "icon": "icon.png" },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Cellowalla-Setup.exe",
+      "shortcutName": "Cellowalla",
+      "createDesktopShortcut": "always"
+    },
+    "linux": {
+      "icon": "icon.png",
+      "category": "Network",
+      "executableName": "cellowalla",
+      "artifactName": "Cellowalla-${version}-${arch}.${ext}",
+      "maintainer": "Cellowalla <90303180+weebaddog@users.noreply.github.com>",
+      "synopsis": "Manage your Cellowalla home network guard"
+    }
+  }
+}

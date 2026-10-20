@@ -13,6 +13,31 @@ jobs:
         with: { node-version: 20 }
       - run: node test/selftest.js
 
+  desktop-linux:
+    # The Linux desktop app: AppImage (any distro) and .deb (Debian/Ubuntu/Mint).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Build
+        working-directory: desktop
+        run: |
+          npm ci --no-audit --no-fund
+          npx electron-builder --linux AppImage deb --publish never
+          ls -la dist
+      - name: The .deb installs and its files are there
+        run: |
+          sudo apt-get install -y -qq ./desktop/dist/*.deb
+          dpkg -L cellowalla-desktop | grep -E 'cellowalla$|\.desktop$'
+          test -x /opt/Cellowalla/cellowalla
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cellowalla-linux
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+
   install:
     # The real installer on a real Linux machine (lookout mode), then everything checked live.
     runs-on: ubuntu-24.04
