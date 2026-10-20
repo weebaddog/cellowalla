@@ -15,6 +15,10 @@ import { nftRules, dnsmasqConf, parseCounters, inCidr } from "../src/gate.js";
 import { keyPair, parseDump, passConf } from "../src/tunnel.js";
 import { parseLeases, hostsIn, randomMac } from "../src/roster.js";
 import { DEFAULTS } from "../src/state.js";
+import crypto from "node:crypto";
+import { authKey, decide, cloudSite, CELLOCLOUD, TEXT } from "../src/cellocloud.js";
+
+const DAY = 86400_000;
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -116,6 +120,35 @@ await test("WireGuard keys and pass files", () => {
   assert.ok(passConf({ ...t, endpoint: "2001:db8::1" }, { ip: "10.88.0.2", privateKey: "P", full: true }, "x").includes("Endpoint = [2001:db8::1]:51820"));
 });
 
+await test("CelloCloud authKey: PBKDF2-SHA256 × 600 000 of the NFKC password, second half only", async () => {
+  const salt = "000102030405060708090a0b0c0d0e0f";
+  const k = await authKey("\ufb01 password", salt); // (the "fi" ligature: NFKC makes it plain "fi")
+  assert.equal(k, "0ed551f3556d0611e6c1143fd6b181b1006814cd997a3725293c907aadf07b40", "matches the vector from Python's hashlib");
+  const full = crypto.pbkdf2Sync("fi password", Buffer.from(salt, "hex"), 600_000, 64, "sha256");
+  assert.equal(k, full.subarray(32).toString("hex"), "matches node's pbkdf2");
+  const base = await crypto.webcrypto.subtle.importKey("raw", new TextEncoder().encode("fi password"), "PBKDF2", false, ["deriveBits"]);
+  const bits = Buffer.from(await crypto.webcrypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Buffer.from(salt, "hex"), iterations: 600_000 }, base, 512));
+  assert.equal(k, bits.subarray(32).toString("hex"), "matches WebCrypto (what web/crypto.js uses)");
+  assert.ok(!k.includes(full.subarray(0, 32).toString("hex")), "the file-key half is never handed out");
+  await assert.rejects(authKey("x", "abcd"));
+});
+await test("CelloCloud plan rules: grace, answers, 14 days offline, a passed lockAt", () => {
+  const now = Date.UTC(2026, 9, 20);
+  const ok = { allowed: true, reason: "ok", message: null, lockAt: null };
+  assert.deepEqual(decide({ graceUntil: now + DAY }, now).locked, false);
+  assert.equal(decide({ graceUntil: now - 1 }, now).locked, true);
+  assert.equal(decide({}, now).message, TEXT.signIn);
+  assert.equal(decide({ signedOut: true }, now).reason, "signed_out");
+  assert.equal(decide({ token: "t", answer: ok, fetchedAt: now - 13 * DAY }, now).locked, false);
+  assert.deepEqual(decide({ token: "t", answer: ok, fetchedAt: now - 15 * DAY }, now), { locked: true, reason: "offline", message: TEXT.offline });
+  assert.equal(decide({ token: "t", answer: { ...ok, lockAt: now + DAY }, fetchedAt: now }, now).lockAt, now + DAY);
+  assert.equal(decide({ token: "t", answer: { ...ok, lockAt: now - 1 }, fetchedAt: now - DAY }, now).reason, "payment_failed");
+  assert.equal(decide({ token: "t", answer: { allowed: false, reason: "not_in_plan", message: "Not in your plan." }, fetchedAt: now }, now).message, "Not in your plan.");
+  assert.equal(cloudSite({}), CELLOCLOUD);
+  assert.equal(cloudSite({ CELLOWALLA_CELLOCLOUD: "https://evil.example" }), CELLOCLOUD, "only a pretend CelloCloud on the box itself");
+  assert.equal(cloudSite({ CELLOWALLA_CELLOCLOUD: "http://127.0.0.1:18790" }), "http://127.0.0.1:18790");
+});
+
 // ---- the whole box ------------------------------------------------------------------------------
 
 console.log("box (dry run)");
@@ -129,6 +162,37 @@ const LISTS = {
   "/alternates/gambling-only/hosts": filler("g"),
   "/custom.txt": `||custom-blocked.test^\n${Array.from({ length: 60 }, (_, i) => `c${i}.filler.test`).join("\n")}`,
 };
+// A pretend CelloCloud (cellosig.com): /api/salt, /api/apps/login, /api/apps/access, /api/apps/logout.
+const CLOUD_PW = "Pässwörd \ufb01ne 1", CLOUD_PW_TYPED = "Pässwörd fine 1"; // (NFKC: both are the same password)
+const SERVER_TEXT = "Your CelloCloud payment didn't go through, so this app is locked. Update your card on cellosig.com.";
+const cloud = { salt: "8f1e2d3c4b5a69788796a5b4c3d2e1f0", totp: null, tokens: new Set(), down: false, logins: [], access: { allowed: true, reason: "ok", message: null, lockAt: null } };
+const cloudKeys = crypto.pbkdf2Sync(CLOUD_PW.normalize("NFKC"), Buffer.from(cloud.salt, "hex"), 600_000, 64, "sha256");
+const cloudAuth = cloudKeys.subarray(32).toString("hex"), cloudFileKey = cloudKeys.subarray(0, 32).toString("hex");
+function fakeCloud(u, opts = {}) {
+  if (cloud.down) throw new TypeError("fetch failed");
+  const json = (status, b) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  const hd = opts.headers || {};
+  if (u.pathname === "/api/salt") return json(200, { salt: u.searchParams.get("u") === "carol" ? cloud.salt : "ffeeddccbbaa99887766554433221100" });
+  if (opts.method === "POST" && hd["x-cellocloud"] !== "1") return json(403, { error: "forbidden" });
+  if (u.pathname === "/api/apps/login") {
+    const b = JSON.parse(opts.body); cloud.logins.push(b);
+    if (b.app !== "cellowalla") return json(400, { error: "bad_app" });
+    if (b.username !== "carol" || b.authKey !== cloudAuth) return json(401, { error: "wrong_login" });
+    if (cloud.totp && !b.totp) return json(401, { error: "totp_required" });
+    if (cloud.totp && b.totp !== cloud.totp) return json(401, { error: "wrong_code" });
+    const token = `ca_${crypto.randomBytes(12).toString("hex")}`; cloud.tokens.add(token);
+    return json(200, { token, ...cloudAnswer() });
+  }
+  const tok = String(hd.authorization || "").replace(/^Bearer /, "");
+  if (!cloud.tokens.has(tok)) return json(401, { error: "signed_out" });
+  if (u.pathname === "/api/apps/access") return json(200, cloudAnswer());
+  if (u.pathname === "/api/apps/logout" && opts.method === "POST") { cloud.tokens.delete(tok); return json(200, { ok: true }); }
+  return json(404, { error: "not_found" });
+}
+const cloudAnswer = () => ({ ...cloud.access, app: "cellowalla", appName: "Cellowalla home network guard", plan: "plus700", username: "carol", checked: Date.now() });
+let clock = null; // (moves the box's clock for the plan check: 14 days offline, grace, lockAt)
+const CLOUD = { site: "https://cloud.test", now: () => clock ?? Date.now() };
+
 const ANSWERS = { "forcesafesearch.google.com": [216, 239, 38, 120], "rebind.example": [192, 168, 1, 5] };
 const pushed = [];
 async function fakeFetch(url, opts = {}) {
@@ -140,6 +204,7 @@ async function fakeFetch(url, opts = {}) {
     const reply = q.type === 1 ? Buffer.concat([P.blockedAnswer(msg, q, 120).subarray(0, -4), ip]) : P.blockedAnswer(msg, { ...q, type: 0 });
     return new Response(reply, { headers: { "content-type": "application/dns-message" } });
   }
+  if (u.hostname === "cloud.test") return fakeCloud(u, opts);
   if (u.hostname === "ntfy.test") { pushed.push({ title: opts.headers.title, body: opts.body }); return new Response("ok"); }
   if (u.hostname === "api.ipify.org") return new Response("203.0.113.9");
   const text = LISTS[u.pathname.replace(/^\/StevenBlack\/hosts\/master/, "")];
@@ -147,7 +212,7 @@ async function fakeFetch(url, opts = {}) {
 }
 
 const logs = [];
-const app = await createApp({ dataDir: dir, fetchImpl: fakeFetch, dry: true, log: (m) => logs.push(m) });
+const app = await createApp({ dataDir: dir, fetchImpl: fakeFetch, dry: true, log: (m) => logs.push(m), cellocloud: CLOUD });
 const DNS = 15353, WEB = 18080;
 await app.start({ dnsPort: DNS, webPort: WEB, host: "127.0.0.1" });
 await app.refreshLists();
@@ -157,6 +222,27 @@ const ask = async (name, type = 1) => {
   const a = P.answers(r);
   return { rcode: P.rcode(r), a: a.filter((x) => x.type === type).map((x) => [...x.rdata].join(".")), cname: a.some((x) => x.type === 5) };
 };
+const REAL = ["93.184.216.34"], NOWHERE = ["0.0.0.0"];
+const planPings = () => app.pings.list().filter((p) => p.kind === "plan");
+
+await test("a new box is locked until signed in with CelloCloud, and the internet works meanwhile", async () => {
+  assert.equal(app.cloud.locked(), true);
+  assert.equal(app.store.data.plan.locked, true);
+  assert.equal(app.cloud.status().graceUntil, undefined, "no grace for a new box");
+  assert.deepEqual((await ask("ads.example.com")).a, REAL, "nothing blocked");
+  assert.deepEqual((await ask("evil.example")).a, REAL);
+  assert.deepEqual((await ask("example.com")).a, REAL);
+  assert.equal(planPings().length, 0, "a new box just asks for the sign-in");
+  const r = await app.cloud.login({ username: " Carol ", password: CLOUD_PW });
+  assert.equal(r.locked, false);
+  assert.equal(app.store.data.plan.locked, false);
+  assert.deepEqual((await ask("ads.example.com")).a, NOWHERE, "protecting once signed in");
+  const sent = cloud.logins.at(-1);
+  assert.equal(sent.app, "cellowalla"); assert.equal(sent.device, os.hostname()); assert.equal(sent.username, "carol");
+  assert.ok(!JSON.stringify(sent).includes(CLOUD_PW) && !JSON.stringify(sent).includes(cloudFileKey), "only the authKey is sent");
+  const saved = fs.readFileSync(path.join(dir, "cellocloud.json"), "utf8");
+  assert.ok(saved.includes("ca_") && !saved.includes(CLOUD_PW) && !saved.includes(cloudAuth) && !saved.includes(cloudFileKey), "only the token is kept");
+});
 let cookie = "";
 const call = async (method, p, body, headers = {}) => {
   const r = await fetch(`http://127.0.0.1:${WEB}${p}`, { method, headers: { "content-type": "application/json", "x-cellowalla": "1", cookie, ...headers }, body: body ? JSON.stringify(body) : undefined, redirect: "manual" });
@@ -411,11 +497,167 @@ await test("problem reports: from any app, repeats counted, people's own emailed
   const backup = JSON.parse(openB((await call("POST", "/api/backup", { passphrase: "backup pass 2" })).body, "backup pass 2"));
   assert.equal(JSON.stringify(backup).includes("abcdefghijklmnop"), false, "the App Password never goes into a backup");
 });
+console.log("CelloCloud plan");
+await test("CelloCloud sign-in from the dashboard: wrong password, two-step code, token never shown", async () => {
+  let r = await call("GET", "/api/cellocloud");
+  assert.equal(r.body.username, "carol"); assert.equal(r.body.locked, false); assert.equal(r.body.plan, "plus700");
+  r = await call("POST", "/api/cellocloud/logout");
+  assert.equal(r.body.locked, true); assert.equal(r.body.signedIn, false);
+  assert.equal(cloud.tokens.size, 0, "signed out at CelloCloud too");
+  assert.deepEqual((await ask("ads.example.com")).a, REAL);
+  r = await call("POST", "/api/cellocloud/login", { username: "carol", password: "wrong" });
+  assert.equal(r.status, 403); assert.equal(r.body.code, "wrong_login");
+  cloud.totp = "123456";
+  r = await call("POST", "/api/cellocloud/login", { username: "carol", password: CLOUD_PW_TYPED });
+  assert.equal(r.status, 403); assert.equal(r.body.code, "totp_required");
+  r = await call("POST", "/api/cellocloud/login", { username: "carol", password: CLOUD_PW_TYPED, totp: "654321" });
+  assert.equal(r.body.code, "wrong_code");
+  r = await call("POST", "/api/cellocloud/login", { username: "carol", password: CLOUD_PW_TYPED, totp: "123 456" });
+  assert.equal(r.status, 200); assert.equal(r.body.locked, false);
+  cloud.totp = null;
+  assert.ok(!JSON.stringify(r.body).includes("ca_"), "the token never goes to the dashboard");
+  assert.deepEqual((await ask("ads.example.com")).a, NOWHERE);
+  assert.ok(!logs.join("\n").includes(CLOUD_PW_TYPED) && !logs.join("\n").includes("wrong\""), "passwords never logged");
+});
+
+await test("payment warning, then payment_failed: protection off, internet untouched, settings refused, one Ping", async () => {
+  // House Rules that would cut people off: a blocked device, a Lobby newcomer, Clean Search.
+  await call("PUT", "/api/devices", { mac: MAC, blocked: true });
+  await call("PUT", "/api/lobby", { on: true });
+  app.roster.see("b8:27:eb:00:00:09", "10.9.9.10");
+  await call("PUT", "/api/shield", { cleanSearch: true });
+  assert.deepEqual((await ask("example.com")).a, NOWHERE, "(blocked before the lock)");
+  assert.equal(app.gate.plan().cut.length + app.gate.plan().lobby.length, 2);
+
+  cloud.access = { allowed: true, reason: "ok", message: null, lockAt: Date.now() + 2 * DAY };
+  let r = await call("POST", "/api/cellocloud/check");
+  assert.equal(r.body.locked, false); assert.ok(r.body.lockAt > Date.now());
+  assert.match(planPings()[0].text, /payment didn.t go through\. Update your card on cellosig\.com by .+ or Cellowalla locks/);
+  assert.equal((await call("GET", "/api/status")).body.plan.lockAt, cloud.access.lockAt, "the dashboard shows the warning banner");
+
+  const pingsBefore = planPings().length;
+  cloud.access = { allowed: false, reason: "payment_failed", message: SERVER_TEXT, lockAt: Date.now() - 1000 };
+  r = await call("POST", "/api/cellocloud/check");
+  assert.equal(r.body.locked, true); assert.equal(r.body.reason, "payment_failed"); assert.equal(r.body.message, SERVER_TEXT);
+  assert.equal(app.store.data.plan.locked, true);
+  // No protection...
+  assert.deepEqual((await ask("ads.example.com")).a, REAL);
+  assert.deepEqual((await ask("evil.example")).a, REAL);
+  assert.equal((await ask("www.google.com")).cname, false, "no Clean Search");
+  // ...and nobody loses the internet: the blocked device (127.0.0.1) gets answers, nothing is in the firewall's cut or Lobby sets.
+  assert.deepEqual((await ask("example.com")).a, REAL);
+  assert.deepEqual(app.gate.plan(), { cut: [], lobby: [], counted: app.gate.plan().counted });
+  await app.gate.apply();
+  const nft = fs.readFileSync(path.join(dir, "dry", "_etc_nftables.d_cellowalla.nft"), "utf8");
+  assert.ok(/set cut4 \{\n\s+type ipv4_addr\n\s+\}/.test(nft) && /set lobby4 \{\n\s+type ipv4_addr\n\s+\}/.test(nft), "empty cut/Lobby sets");
+  // Gatekeeper mode (the box is the router): still routes, NATs, hands out addresses and answers DNS.
+  const gk = { ...app.store.data, mode: "gatekeeper" };
+  const rules = nftRules(gk, app.gate.plan());
+  for (const want of ['iifname "eth0" oifname "eth1" accept', 'oifname "eth1" masquerade', "ct state established,related accept", "redirect to :53"]) assert.ok(rules.includes(want), `gatekeeper keeps: ${want}`);
+  assert.ok(!/elements/.test(rules.split("chain input")[0]), "nobody in cut4/lobby4");
+  assert.ok(dnsmasqConf(gk).includes("dhcp-range=") && dnsmasqConf(gk).includes(`dhcp-option=option:dns-server,${gk.net.boxIp}`));
+  assert.equal(rulesFor(app.store.data, app.store.data.devices[MAC]).cut, null);
+  // Settings can be looked at but not changed.
+  r = await call("PUT", "/api/shield", { cleanSearch: false });
+  assert.equal(r.status, 423); assert.equal(r.body.code, "locked"); assert.equal(r.body.error, `Cellowalla is locked: ${SERVER_TEXT}`);
+  assert.equal((await call("PUT", "/api/devices", { mac: MAC, blocked: false })).status, 423);
+  assert.equal((await call("POST", "/api/shield/pause", { minutes: 5 })).status, 423);
+  assert.equal((await call("POST", "/api/tunnel/passes", { name: "x" })).status, 423);
+  assert.equal((await call("GET", "/api/devices")).body.devices.find((d) => d.mac === MAC).cut, null);
+  assert.equal((await call("POST", "/api/pings/read")).status, 200);
+  assert.equal((await call("PUT", "/api/updates", { auto: true })).status, 200, "updates still come in");
+  assert.equal((await call("GET", "/api/status")).body.plan.locked, true);
+  // The apps' notifications: "Cellowalla is locked: <message>", once.
+  await call("POST", "/api/cellocloud/check");
+  app.planChanged();
+  const news = planPings().slice(0, planPings().length - pingsBefore);
+  assert.equal(news.length, 1, news.map((p) => p.text).join(" | "));
+  assert.ok(news[0].text.startsWith(`Cellowalla is locked: ${SERVER_TEXT}`));
+  assert.ok(pushed.some((p) => p.body.startsWith("Cellowalla is locked:")), "sent to the phone (ntfy) too");
+
+  // Fixed on cellosig.com: unlocks by itself at the next check.
+  cloud.access = { allowed: true, reason: "ok", message: null, lockAt: null };
+  r = await call("POST", "/api/cellocloud/check");
+  assert.equal(r.body.locked, false);
+  assert.equal(planPings()[0].text, "Cellowalla is unlocked: protection is back on.");
+  assert.deepEqual((await ask("ads.example.com")).a, NOWHERE);
+  assert.deepEqual((await ask("example.com")).a, NOWHERE, "House Rules are back (the device is still blocked)");
+  assert.equal(app.gate.plan().cut.length, 1);
+  await call("PUT", "/api/devices", { mac: MAC, blocked: false });
+  await call("PUT", "/api/lobby", { on: false });
+  await call("PUT", "/api/shield", { cleanSearch: false });
+});
+
+await test("offline: the last answer stands; 14 days without one locks; a lockAt that passes offline locks", async () => {
+  cloud.down = true;
+  let r = await call("POST", "/api/cellocloud/check");
+  assert.equal(r.body.locked, false, "one failed check never locks"); assert.ok(r.body.lastError);
+  clock = Date.now() + 13 * DAY; app.planChanged();
+  assert.equal(app.store.data.plan.locked, false);
+  clock = Date.now() + 15 * DAY; app.planChanged();
+  assert.equal(app.store.data.plan.locked, true); assert.equal(app.store.data.plan.reason, "offline");
+  assert.match(planPings()[0].text, /^Cellowalla is locked: Connect to the internet so Cellowalla can check your CelloCloud plan\./);
+  assert.deepEqual((await ask("ads.example.com")).a, REAL);
+  cloud.down = false; clock = null;
+  r = await call("POST", "/api/cellocloud/check");
+  assert.equal(r.body.locked, false, "back online: unlocked");
+  cloud.access = { allowed: true, reason: "ok", message: null, lockAt: Date.now() + 3600_000 };
+  await call("POST", "/api/cellocloud/check");
+  cloud.down = true;
+  clock = Date.now() + 2 * 3600_000; app.planChanged();
+  assert.equal(app.store.data.plan.reason, "payment_failed", "lockAt passed while offline");
+  cloud.down = false; clock = null; cloud.access = { allowed: true, reason: "ok", message: null, lockAt: null };
+  assert.equal((await call("POST", "/api/cellocloud/check")).body.locked, false);
+});
+
+await test("signed out at CelloCloud (password changed): forgets the token and locks", async () => {
+  cloud.tokens.clear();
+  const r = await call("POST", "/api/cellocloud/check");
+  assert.equal(r.body.locked, true); assert.equal(r.body.signedIn, false); assert.equal(r.body.reason, "signed_out");
+  assert.ok(!fs.readFileSync(path.join(dir, "cellocloud.json"), "utf8").includes("ca_"));
+  assert.equal((await call("POST", "/api/cellocloud/login", { username: "carol", password: CLOUD_PW })).body.locked, false);
+});
+
+await test("the CelloCloud sign-in is never in a backup, and a restore keeps this box's own", async () => {
+  const { openBackup } = await import("../src/web.js");
+  const sealed = (await call("POST", "/api/backup", { passphrase: "backup pass 3" })).body;
+  const text = openBackup(sealed, "backup pass 3");
+  assert.ok(!text.includes("ca_") && !text.includes("carol") && !JSON.parse(text).state.plan);
+  assert.equal((await call("POST", "/api/backup/restore", { backup: sealed, passphrase: "backup pass 3" })).status, 200);
+  assert.equal(app.cloud.status().signedIn, true); assert.equal(app.store.data.plan.locked, false);
+  assert.equal((await call("POST", "/api/login", { password: "a long password" })).status, 200);
+});
+
+await test("a box that was running before the update: 7 days of grace with a banner, then locked", async () => {
+  const d2 = fs.mkdtempSync(path.join(os.tmpdir(), "cellowalla-old-"));
+  fs.writeFileSync(path.join(d2, "state.json"), JSON.stringify({ ...DEFAULTS(), plan: undefined, admin: app.store.data.admin }));
+  let t2 = null;
+  const opts = { dataDir: d2, fetchImpl: fakeFetch, dry: true, log: () => {}, cellocloud: { site: CLOUD.site, now: () => t2 ?? Date.now() } };
+  const old = await createApp(opts);
+  let st = old.cloud.status();
+  assert.equal(st.locked, false); assert.equal(st.signedIn, false);
+  assert.ok(Math.abs(st.graceUntil - (Date.now() + 7 * DAY)) < 60_000, "7 days");
+  assert.equal(rulesFor(old.store.data, null).shield, true, "still protecting");
+  assert.ok(old.pings.list().some((p) => p.kind === "plan" && /^Sign in with your CelloCloud account .* by .+, or Cellowalla stops protecting/.test(p.text)));
+  t2 = Date.now() + 8 * DAY; old.planChanged();
+  assert.equal(old.store.data.plan.locked, true); assert.equal(old.store.data.plan.reason, "sign_in");
+  assert.ok(old.pings.list()[0].text.startsWith("Cellowalla is locked: Sign in with your CelloCloud account"));
+  old.store.flush(); old.pings.flush();
+  const again = await createApp(opts);
+  assert.equal(again.cloud.locked(), true, "restarting doesn't start a new grace");
+  t2 = null;
+  assert.equal(again.cloud.locked(), false, "(still inside the first 7 days)");
+  again.store.flush(); again.pings.flush();
+  fs.rmSync(d2, { recursive: true, force: true });
+});
+
 await test("status adds it all up; state survives a restart", async () => {
   const s = (await call("GET", "/api/status")).body;
   assert.ok(s.shield.lookups > 10 && s.shield.blocked > 5 && s.devices.total >= 2);
   app.stop();
-  const again = await createApp({ dataDir: dir, fetchImpl: fakeFetch, dry: true, log: () => {} });
+  const again = await createApp({ dataDir: dir, fetchImpl: fakeFetch, dry: true, log: () => {}, cellocloud: CLOUD });
+  assert.equal(again.cloud.status().username, "carol", "still signed in after a restart");
+  assert.equal(again.store.data.plan.locked, false);
   assert.equal(again.store.data.devices[MAC].name, "Sam's tablet");
   assert.equal(again.store.data.crews[crewId].name, "Kids");
   assert.ok(again.store.data.admin.hash);

@@ -1,7 +1,7 @@
 {
   "name": "cellowalla-desktop",
   "productName": "Cellowalla",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Cellowalla for Windows and Linux: your box's dashboard, tray and notifications",
   "author": "Cellowalla <90303180+weebaddog@users.noreply.github.com>",
   "homepage": "https://github.com/weebaddog/cellowalla",

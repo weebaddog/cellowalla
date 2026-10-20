@@ -12,6 +12,9 @@ import { makeQuery } from "../src/dnsproto.js";
 
 const dir = path.join(os.tmpdir(), "cellowalla-demo");
 fs.rmSync(dir, { recursive: true, force: true });
+// Not signed in with CelloCloud: shown like a box from before the plan check (7 days of grace, banner).
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, "cellocloud.json"), JSON.stringify({ graceUntil: Date.now() + 7 * 86400_000, graceGiven: true }));
 const app = await createApp({ dataDir: dir, dry: true });
 const now = Date.now();
 const dev = (mac, ip, extra) => ({ mac, ip, name: null, host: null, vendor: null, firstSeen: now - 86400_000 * 9, lastSeen: now, crew: null, blocked: false, pausedUntil: 0, lobby: false, kind: "lan", ...extra });

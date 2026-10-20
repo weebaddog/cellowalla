@@ -20,6 +20,7 @@ import { createPings } from "./pings.js";
 import { createWeb } from "./web.js";
 import { createUpdater } from "./update.js";
 import { createReports } from "./reports.js";
+import { createCelloCloud } from "./cellocloud.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
@@ -44,7 +45,7 @@ function lanAddress(ifname) {
   return { ip: v4.address, cidr: `${ipn.map((x, i) => x & m[i]).join(".")}/${bits}` };
 }
 
-export async function createApp({ dataDir, fetchImpl = fetch, log = console.log, dry, update = {} } = {}) {
+export async function createApp({ dataDir, fetchImpl = fetch, log = console.log, dry, update = {}, cellocloud = {} } = {}) {
   dataDir ||= process.env.CELLOWALLA_DATA || "/var/lib/cellowalla";
   const store = openState(dataDir);
   const sys = createSys({ dataDir, log, ...(dry !== undefined ? { dry } : {}) });
@@ -72,6 +73,35 @@ export async function createApp({ dataDir, fetchImpl = fetch, log = console.log,
   app.reports = createReports({ store, dir: dataDir, version: VERSION, log });
   app.updater = createUpdater({ store, version: VERSION, dataDir, sys, fetchImpl, log, pings: app.pings, ...update });
 
+  // The CelloCloud plan: locked = no protection, internet untouched (see cellocloud.js).
+  app.cloud = createCelloCloud({ dataDir, fetchImpl, log, device: os.hostname() || "Cellowalla box", setUp: !!store.data.admin, onChange: () => app.planChanged(), ...cellocloud });
+  const day = (t) => new Date(t).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  /** Follows the plan check: switches protection off/on and sends each piece of plan news once. */
+  app.planChanged = () => {
+    const st = app.cloud.status();
+    const was = store.data.plan;
+    if (was.locked !== st.locked || was.reason !== st.reason || was.message !== st.message) {
+      store.change("plan", (s) => { s.plan = { ...s.plan, locked: st.locked, reason: st.reason, message: st.message }; });
+      if (was.locked !== st.locked) {
+        log(`[cellocloud] ${st.locked ? `locked (${st.reason}): protection is off, the internet keeps working` : "unlocked: protection is on"}`);
+        app.shield.clearCache();
+        if (app.web) app.gate.apply().catch((e) => log(`[gate] ${e.message}`)); // (before start, start applies it)
+      }
+    }
+    // A new box that was never signed in just shows the sign-in; no news to send.
+    const quiet = st.reason === "sign_in" && !st.graceGiven && !st.everSignedIn;
+    const news = st.locked ? (quiet ? null : `locked:${st.reason}`) : st.lockAt ? `warn:${st.lockAt}` : st.graceUntil ? "grace" : null;
+    if (news === store.data.plan.notified) return;
+    let text = null;
+    if (st.locked) text = `Cellowalla is locked: ${st.message} Your internet keeps working, but nothing is blocked or filtered until then.`;
+    else if (st.lockAt) text = `Your CelloCloud payment didn't go through. Update your card on cellosig.com by ${day(st.lockAt)} or Cellowalla locks.`;
+    else if (st.graceUntil) text = `Sign in with your CelloCloud account (dashboard → Settings) by ${day(st.graceUntil)}, or Cellowalla stops protecting your network then.`;
+    else if (String(store.data.plan.notified || "").startsWith("locked:")) text = "Cellowalla is unlocked: protection is back on.";
+    if (text && store.data.admin) app.pings.send("plan", text);
+    store.change("plan", (s) => { s.plan.notified = news; });
+  };
+  app.planChanged();
+
   let refreshing = null;
   app.refreshLists = () => (refreshing ||= app.lists.refresh(store.data.shield.custom).finally(() => { refreshing = null; app.shield.clearCache(); }));
 
@@ -97,9 +127,10 @@ export async function createApp({ dataDir, fetchImpl = fetch, log = console.log,
     every(24 * 3600_000, () => app.refreshLists());
     setTimeout(() => app.roster.sweep(), 5000).unref();
     stopUpdates = app.updater.start();
+    stopCloud = app.cloud.start();
   };
-  let stopUpdates = () => {};
-  app.stop = () => { for (const t of timers) clearInterval(t); stopUpdates(); app.shield.close(); app.web?.close(); store.flush(); app.pings.flush(); app.reports.flushFeed(); };
+  let stopUpdates = () => {}, stopCloud = () => {};
+  app.stop = () => { for (const t of timers) clearInterval(t); stopUpdates(); stopCloud(); app.shield.close(); app.web?.close(); store.flush(); app.pings.flush(); app.reports.flushFeed(); };
   return app;
 }
 

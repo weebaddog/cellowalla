@@ -1,7 +1,7 @@
 // Cellowalla dashboard. Plain JavaScript, no build step: one screen per tab, redrawn from the API.
 
 const root = document.getElementById("app");
-const ui = { tab: localGet("tab") || "home", timer: null, unread: 0 };
+const ui = { tab: localGet("tab") || "home", timer: null, lockTimer: null, unread: 0 };
 
 function localGet(k) { try { return localStorage.getItem(`cw.${k}`); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(`cw.${k}`, v); } catch { /* private window */ } }
@@ -26,7 +26,8 @@ async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { "content-type": "application/json", "x-cellowalla": "1" }, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin" });
   const data = await r.json().catch(() => ({}));
   if (r.status === 401) { showAuth(); throw new Error("Sign in"); }
-  if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  if (r.status === 423 && data.code === "locked") { planGate(); throw Object.assign(new Error(data.error), { code: "locked" }); }
+  if (!r.ok) throw Object.assign(new Error(data.error || `Error ${r.status}`), { code: data.code });
   return data;
 }
 
@@ -104,11 +105,11 @@ async function start() {
   let hello;
   try { hello = await fetch("/api/hello").then((r) => r.json()); } catch { root.replaceChildren(h("div", { class: "auth card" }, h("p", {}, "Can't reach the box."))); return; }
   if (!hello.signedIn) return showAuth(hello.setUp);
-  shell();
+  planGate();
 }
 
 function showAuth(setUp = true) {
-  clearInterval(ui.timer);
+  clearInterval(ui.timer); clearInterval(ui.lockTimer);
   const err = h("p", { class: "muted", role: "alert" });
   const code = h("input", { type: "text", autocomplete: "off", autocapitalize: "characters", placeholder: "e.g. K7QM2XWD" });
   const pw = h("input", { type: "password", autocomplete: setUp ? "current-password" : "new-password" });
@@ -122,7 +123,7 @@ function showAuth(setUp = true) {
         if (pw.value !== pw2.value) throw new Error("The two passwords don't match");
         await api("POST", "/api/setup", { code: code.value, password: pw.value });
       }
-      shell();
+      planGate();
     } catch (e2) { err.textContent = e2.message; }
   } },
     setUp ? [h("h1", {}, "Sign in"), h("label", { class: "field" }, h("span", {}, "Password"), pw)]
@@ -137,6 +138,117 @@ function showAuth(setUp = true) {
   (setUp ? pw : code).focus();
 }
 
+// ---- CelloCloud: this box's account and plan ------------------------------------------------------
+// Cellowalla comes with CelloCloud's 700 GB plan. The box signs in with the customer's CelloCloud
+// account; when the plan doesn't include Cellowalla (or a payment failed and wasn't fixed) the box
+// stops protecting, but the home's internet keeps working. The CelloCloud server decides.
+
+const fmtDay = (t) => new Date(t).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+
+/** After signing in to the box: the dashboard, or the CelloCloud sign-in / lock page. */
+async function planGate() {
+  let p;
+  try { p = await api("GET", "/api/cellocloud"); } catch (e) { if (e.message !== "Sign in") shell(); return; }
+  if (!p.locked) return shell();
+  return p.signedIn ? lockPage(p) : cloudSignIn(p);
+}
+
+function authFrame(...kids) {
+  clearInterval(ui.timer); clearInterval(ui.lockTimer);
+  root.replaceChildren(h("div", { class: "auth" }, h("div", { class: "logo" }, h("img", { src: "icon.svg", alt: "" }), h("h1", {}, "Cellowalla")), ...kids));
+}
+
+/** The CelloCloud sign-in: during first setup, after being signed out, or to use another account. */
+function cloudSignIn(p = {}, { back = null } = {}) {
+  const err = h("p", { class: "muted", role: "alert" });
+  const user = h("input", { type: "text", autocomplete: "username", autocapitalize: "none", spellcheck: "false", value: p.username || "" });
+  const pw = h("input", { type: "password", autocomplete: "current-password" });
+  const code = h("input", { type: "text", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6", placeholder: "123456" });
+  const codeField = h("label", { class: "field", hidden: true }, h("span", {}, "Two-step code"), code);
+  const go = h("button", { class: "btn primary", type: "submit" }, "Sign in");
+  const form = h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    err.textContent = ""; go.disabled = true; go.textContent = "Signing in…";
+    try {
+      const r = await api("POST", "/api/cellocloud/login", { username: user.value, password: pw.value, ...(codeField.hidden ? {} : { totp: code.value }) });
+      pw.value = "";
+      if (r.locked) return lockPage(r);
+      shell(); toast(`Signed in as ${r.username}. Cellowalla is protecting your network.`);
+    } catch (e2) {
+      if (e2.code === "totp_required" || e2.code === "wrong_code") { codeField.hidden = false; code.focus(); }
+      err.textContent = e2.message;
+    } finally { go.disabled = false; go.textContent = "Sign in"; }
+  } },
+    h("h1", {}, "Sign in with CelloCloud"),
+    h("p", { class: "muted" }, p.reason === "signed_out" ? p.message
+      : "Cellowalla comes with CelloCloud's 700 GB plan. Sign in with your CelloCloud username and password to turn on its protection. Until then your internet works as normal, but nothing is blocked or filtered."),
+    h("label", { class: "field" }, h("span", {}, "CelloCloud username"), user),
+    h("label", { class: "field" }, h("span", {}, "CelloCloud password"), pw),
+    codeField,
+    h("p", { class: "muted" }, "Your password stays on this box: it's only used to make the sign-in key, then forgotten."),
+    err,
+    h("div", { class: "btns" }, go,
+      back ? h("button", { class: "btn", type: "button", onclick: back }, "Cancel") : null,
+      h("a", { class: "btn", href: "https://cellosig.com", target: "_blank", rel: "noopener" }, "Get CelloCloud")));
+  authFrame(form);
+  (user.value ? pw : user).focus();
+}
+
+/** Locked: the server's message, Check again, and another account. Unlocks by itself. */
+function lockPage(p) {
+  const line = h("p", { class: "muted" });
+  const showLine = (x) => { line.textContent = x.lastError ? `${x.lastError}. ` : ""; line.textContent += x.checkedAt ? `Last answer from CelloCloud: ${ago(x.checkedAt)}.` : ""; };
+  showLine(p);
+  const again = h("button", { class: "btn primary", onclick: async () => {
+    again.disabled = true; again.textContent = "Checking…";
+    try { const r = await api("POST", "/api/cellocloud/check"); if (!r.locked) { shell(); toast("Cellowalla is unlocked: protection is back on."); return; } showLine(r); msg.textContent = r.message; toast("Still locked", true); }
+    catch (e) { toast(e.message, true); }
+    finally { again.disabled = false; again.textContent = "Check again"; }
+  } }, "Check again");
+  const msg = h("p", {}, p.message);
+  authFrame(h("div", { class: "card" },
+    h("h1", {}, "Cellowalla is locked"),
+    msg,
+    h("div", { class: "note" }, "Your home's internet keeps working. Cellowalla just isn't blocking ads, trackers or bad sites, and House Rules and Clean Search are off, until this is sorted out."),
+    p.username ? h("p", { class: "muted" }, `CelloCloud account: ${p.username}`) : null,
+    line,
+    h("div", { class: "btns" }, again,
+      h("button", { class: "btn", onclick: () => confirmSheet("Sign out of CelloCloud?", "This box forgets the CelloCloud account. Then sign in with the same or another account.", "Sign out", () => act(async () => cloudSignIn(await api("POST", "/api/cellocloud/logout")))) }, "Sign out / use another account"),
+      h("a", { class: "btn", href: "https://cellosig.com", target: "_blank", rel: "noopener" }, "cellosig.com")),
+    h("div", { class: "btns" }, h("a", { class: "btn small", href: "guide.html" }, "User guide"),
+      h("button", { class: "btn small", onclick: () => act(async () => { await api("POST", "/api/logout"); showAuth(true); }) }, "Sign out of this dashboard"))));
+  // Comes back by itself when the plan does (the box asks CelloCloud every 6 hours and on "Check again").
+  ui.lockTimer = setInterval(async () => {
+    const r = await api("GET", "/api/cellocloud").catch(() => null);
+    if (r && !r.locked) { clearInterval(ui.lockTimer); shell(); toast("Cellowalla is unlocked: protection is back on."); }
+  }, 60_000);
+}
+
+/** The warning above every screen: a failed payment, or sign-in still to do (grace). */
+function showPlanBanner(p) {
+  if (!banner || !p) return;
+  if (p.locked) return planGate();
+  banner.replaceChildren(...[
+    p.lockAt ? h("div", { class: "note warn", role: "alert" }, `Your CelloCloud payment didn't go through. Update your card on cellosig.com by ${fmtDay(p.lockAt)} or Cellowalla locks. `,
+      h("a", { href: "https://cellosig.com", target: "_blank", rel: "noopener" }, "Open cellosig.com")) : null,
+    !p.signedIn && p.graceUntil ? h("div", { class: "note warn", role: "alert" }, `Sign in with your CelloCloud account. Cellowalla now comes with CelloCloud's 700 GB plan; without a sign-in it stops protecting on ${fmtDay(p.graceUntil)}. `,
+      h("a", { href: "#", onclick: (e) => { e.preventDefault(); cloudSignIn(p, { back: shell }); } }, "Sign in now")) : null].filter(Boolean));
+}
+
+/** Settings → CelloCloud account. */
+function cloudCard(p) {
+  return h("div", { class: "card" }, h("h2", {}, "CelloCloud account"),
+    p.signedIn ? [
+      h("p", {}, "Signed in as ", h("b", {}, p.username), p.plan ? ` · plan ${p.plan}` : ""),
+      h("p", { class: "muted" }, `This box is "${p.device || "Cellowalla box"}" in your CelloCloud account. It checks your plan every 6 hours${p.checkedAt ? `; last answer ${ago(p.checkedAt)}` : ""}.${p.lastError ? ` ${p.lastError}.` : ""}`),
+      p.lockAt ? h("div", { class: "note warn" }, `Payment problem: update your card on cellosig.com by ${fmtDay(p.lockAt)} or Cellowalla locks.`) : null,
+      h("div", { class: "btns" },
+        h("button", { class: "btn", onclick: () => act(async () => { const r = await api("POST", "/api/cellocloud/check"); if (r.locked) planGate(); else draw(); }, "Checked: Cellowalla is included") }, "Check again"),
+        h("button", { class: "btn", onclick: () => confirmSheet("Sign out of CelloCloud?", "Cellowalla stops protecting your network (the internet keeps working) until this box is signed in again, with this or another account.", "Sign out", () => act(async () => cloudSignIn(await api("POST", "/api/cellocloud/logout")))) }, "Sign out / use another account"))]
+      : [h("p", { class: "muted" }, `Not signed in.${p.graceUntil ? ` Cellowalla keeps protecting until ${fmtDay(p.graceUntil)}; after that it needs a CelloCloud account with Cellowalla in its plan.` : ""}`),
+        h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: () => cloudSignIn(p, { back: shell }) }, "Sign in with CelloCloud"))]);
+}
+
 // ---- the frame ----------------------------------------------------------------------------------
 
 const TABS = [
@@ -146,10 +258,12 @@ const TABS = [
   ["rules", "☾", "House Rules"],
   ["tunnel", "⇄", "Tunnel"],
 ];
-let content, bell;
+let content, bell, banner;
 
 function shell() {
-  content = h("main");
+  clearInterval(ui.lockTimer);
+  banner = h("div");
+  content = h("div");
   bell = h("button", { class: "iconbtn", "aria-label": "Pings", onclick: () => go("pings") }, "🔔");
   const top = h("header", { class: "top" },
     h("div", { class: "logo" }, h("img", { src: "icon.svg", alt: "" }), "Cellowalla"),
@@ -158,7 +272,7 @@ function shell() {
     bell,
     h("button", { class: "iconbtn", "aria-label": "Settings", onclick: () => go("settings") }, "⚙"));
   const nav = h("nav", { class: "tabs" }, TABS.map(([k, ic, label]) => h("button", { "data-tab": k, onclick: () => go(k) }, h("span", { class: "ic", "aria-hidden": "true" }, ic), label)));
-  root.replaceChildren(top, content, nav);
+  root.replaceChildren(top, h("main", {}, banner, content), nav);
   go(ui.tab in SCREENS ? ui.tab : "home");
 }
 
@@ -203,7 +317,7 @@ async function draw(quiet = false) {
   } catch (e) {
     if (e.message !== "Sign in" && !quiet) content.replaceChildren(h("div", { class: "card" }, h("p", {}, e.message)));
   }
-  api("GET", "/api/status").then((s) => setUnread(s.pings.unread)).catch(() => {});
+  api("GET", "/api/status").then((s) => { setUnread(s.pings.unread); showPlanBanner(s.plan); }).catch(() => {});
 }
 
 function setUnread(n) {
@@ -720,7 +834,7 @@ async function reportsCard() {
 }
 
 async function settingsScreen() {
-  const [s, u] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/updates")]);
+  const [s, u, p] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/updates"), api("GET", "/api/cellocloud")]);
   const cur = h("input", { type: "password", autocomplete: "current-password" }), pw = h("input", { type: "password", autocomplete: "new-password" });
   const homeDns = h("input", { type: "text", value: s.net.homeDns || "", placeholder: "e.g. 192.168.1.1" });
   return h("div", {},
@@ -730,6 +844,7 @@ async function settingsScreen() {
       h("p", { class: "muted" }, `Address ${s.net.boxIp} · network ${s.net.lanCidr} · home port ${s.net.lanIf}${s.mode === "gatekeeper" ? ` · internet port ${s.net.wanIf}` : ""}`),
       h("p", { class: "muted" }, "To switch modes, run the installer again on the box (see the user guide)."),
       h("p", { class: "muted" }, `Cellowalla ${s.version}${s.dry ? " (test mode)" : ""}`)),
+    cloudCard(p),
     s.mode === "lookout" ? h("div", { class: "card" }, h("h2", {}, "Home names"),
       h("p", { class: "muted" }, "If your router gives devices names like printer.lan, enter its address so those names keep working."),
       h("div", { class: "inline" }, homeDns, h("button", { class: "btn", onclick: () => act(() => api("PUT", "/api/settings", { homeDns: homeDns.value }), "Saved") }, "Save"))) : null,

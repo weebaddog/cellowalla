@@ -26,7 +26,7 @@ class PingsWorker(context: Context, params: WorkerParameters) : Worker(context, 
 
     companion object {
         private const val CHANNEL = "pings"
-        private val TITLES = mapOf("newDevice" to "New device", "malware" to "Malware blocked", "tunnel" to "Tunnel", "bedtime" to "Bedtime", "system" to "Cellowalla")
+        private val TITLES = mapOf("newDevice" to "New device", "malware" to "Malware blocked", "tunnel" to "Tunnel", "bedtime" to "Bedtime", "system" to "Cellowalla", "plan" to "Cellowalla")
 
         fun schedule(context: Context) {
             val req = PeriodicWorkRequestBuilder<PingsWorker>(15, TimeUnit.MINUTES).build()

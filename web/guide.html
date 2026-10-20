@@ -119,9 +119,19 @@ sudo bash install/install.sh</pre>
   <li>On a phone or computer at home, open the address the installer printed (for example <code>https://192.168.1.50</code>).</li>
   <li>Your browser will warn that the connection isn't private. That's expected: the box made its own certificate because it's only reachable from home. Choose <i>Advanced → Continue</i>.</li>
   <li>Type the setup code and choose a password (10 characters or more).</li>
+  <li>Sign in with your <b>CelloCloud</b> username and password (and the two-step code, if your account asks for one). Cellowalla comes with CelloCloud's 700 GB plan; it starts protecting once the box is signed in.</li>
   <li>Optional: use the browser's <i>Add to Home Screen</i> to get a Cellowalla icon on your phone.</li>
 </ol>
 <p>Forgot the password? On the box, run <code>sudo cellowalla-reset-password</code>. It clears the password and prints a new setup code.</p>
+
+<h2 id="cellocloud">Your CelloCloud plan</h2>
+<p>Cellowalla is included in CelloCloud's 700 GB plan. The box is signed in with one CelloCloud account (see <b>Settings → CelloCloud account</b>) and checks the plan when it starts and every 6 hours. Your CelloCloud password stays on the box only long enough to make the sign-in key; it's never stored.</p>
+<ul>
+  <li><b>Payment problem:</b> if a CelloCloud payment doesn't go through, a banner shows the date it has to be fixed by. Update your card on cellosig.com before then.</li>
+  <li><b>Locked:</b> if the plan doesn't include Cellowalla, or a failed payment wasn't fixed in time, Cellowalla locks. <b>Your internet keeps working</b> (in Gatekeeper mode the box keeps routing and handing out addresses), but nothing is blocked or filtered, House Rules, the Lobby and Clean Search are off, and settings can't be changed. The apps show a Ping: "Cellowalla is locked". Fix it on cellosig.com and press <b>Check again</b>; it also unlocks by itself at the next check.</li>
+  <li><b>Offline:</b> one missed check never locks. If the box can't reach CelloCloud for 14 days, it locks until it can.</li>
+  <li><b>Boxes set up before this:</b> they keep protecting for 7 days after the update, with a banner asking you to sign in.</li>
+</ul>
 
 <h2 id="home">Home screen</h2>
 <ul>

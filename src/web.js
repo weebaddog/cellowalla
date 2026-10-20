@@ -15,6 +15,10 @@ import { newId, DEFAULTS, merge } from "./state.js";
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json", ".png": "image/png" };
 const SESSION_DAYS = 30;
+// What still works while Cellowalla is locked: the CelloCloud sign-in itself, reading Pings, updates,
+// saving a backup, and the box password. Every other change is refused (423) until the plan is back.
+const WHILE_LOCKED = new Set(["POST /api/cellocloud/login", "POST /api/cellocloud/check", "POST /api/cellocloud/logout", "POST /api/pings/read",
+  "PUT /api/updates", "POST /api/updates/check", "POST /api/backup", "POST /api/password"]);
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -78,6 +82,13 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
 
   const reportsFrom = new Map(); // ip → [times]: at most 30 problem reports an hour from one address
 
+  /** The CelloCloud sign-in and plan, as the dashboard shows it (never the token). */
+  function planView() {
+    const s = app.cloud.status();
+    return { locked: s.locked, reason: s.reason, message: s.message, signedIn: s.signedIn, username: s.username, device: s.device, plan: s.plan,
+      lockAt: s.lockAt || null, graceUntil: s.graceUntil || null, checkedAt: s.checkedAt, lastTry: s.lastTry, lastError: s.lastError };
+  }
+
   const routes = {
     // Problem reports: the list, and where they're emailed.
     "GET /api/reports": () => ({ reports: app.reports.list(), mail: app.reports.settings() }),
@@ -95,8 +106,15 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
           cut: devices.filter((d) => rulesFor(data, d).cut).length },
         tunnel: { on: data.tunnel.on, online: app.tunnel.status().filter((p) => p.online).length, passes: data.tunnel.passes.length },
         pings: { unread: app.pings.unread() },
+        plan: planView(),
       };
     },
+
+    // CelloCloud: the account this box is signed in with, and whether its plan includes Cellowalla.
+    "GET /api/cellocloud": () => planView(),
+    "POST /api/cellocloud/login": async (b) => { await app.cloud.login({ username: b.username, password: b.password, totp: b.totp }); return planView(); },
+    "POST /api/cellocloud/check": async () => { await app.cloud.check(); return planView(); },
+    "POST /api/cellocloud/logout": async () => { await app.cloud.logout(); return planView(); },
 
     // Shield
     "GET /api/shield": () => {
@@ -276,7 +294,7 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
     // the owner picks (scrypt → AES-256-GCM). Never the mail App Password.
     "POST /api/backup": (b) => {
       if (String(b.passphrase || "").length < 8) throw fail(400, "Pick a backup password of at least 8 characters");
-      const plain = JSON.stringify({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: { ...store.data, reportsMail: { ...store.data.reportsMail, pass: undefined } } });
+      const plain = JSON.stringify({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: { ...store.data, plan: undefined, reportsMail: { ...store.data.reportsMail, pass: undefined } } });
       return sealBackup(plain, String(b.passphrase), app.version);
     },
     "POST /api/backup/restore": async (b) => {
@@ -295,7 +313,7 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       }
       if (!st.admin?.salt || !st.admin?.hash) throw fail(400, "That backup has no password in it");
       const next = merge(base, st);
-      const here = { mode: store.data.mode, net: { ...store.data.net, homeDns: typeof next.net.homeDns === "string" ? next.net.homeDns : "" }, reportsMail: { ...next.reportsMail, pass: store.data.reportsMail?.pass } };
+      const here = { mode: store.data.mode, net: { ...store.data.net, homeDns: typeof next.net.homeDns === "string" ? next.net.homeDns : "" }, reportsMail: { ...next.reportsMail, pass: store.data.reportsMail?.pass }, plan: store.data.plan }; // (the plan belongs to this box's own CelloCloud sign-in)
       store.change("restore", (s) => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, next, here, { traffic: {} }); });
       store.flush();
       sessions.clear(); // sign in again, with the backup's password
@@ -391,6 +409,10 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       if (!signedIn(req)) throw fail(401, "Sign in");
       const route = routes[`${req.method} ${url.pathname}`];
       if (!route) throw fail(404, "No such thing");
+      // Locked: everything can be looked at, but settings stay as they are until the plan is back.
+      if (req.method !== "GET" && !WHILE_LOCKED.has(`${req.method} ${url.pathname}`) && app.cloud.locked()) {
+        throw Object.assign(fail(423, `Cellowalla is locked: ${app.cloud.status().message}`), { code: "locked" });
+      }
       const body = req.method === "GET" ? {} : await readJson(req, url.pathname === "/api/backup/restore" ? 16 << 20 : 65536);
       return send(res, 200, await route(body, url));
     } catch (e) {
@@ -398,7 +420,7 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
         log(`[web] ${req.method} ${url.pathname}: ${e.stack || e.message}`);
         app.reports?.add({ source: "box", kind: "box error", message: `${req.method} ${url.pathname}: ${e.message}`, detail: e.stack, version: app.version });
       }
-      return send(res, e.status || 500, { error: e.status ? e.message : "Something went wrong on the box" });
+      return send(res, e.status || 500, { error: e.status ? e.message : "Something went wrong on the box", ...(e.status && e.code ? { code: e.code } : {}) });
     }
   }
 

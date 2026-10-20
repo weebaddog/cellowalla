@@ -125,7 +125,7 @@ async function checkPings() {
     const seen = new Set(config.seen);
     const fresh = pings.filter((p) => !p.read && !seen.has(p.id)).slice(0, 5).reverse();
     for (const p of fresh) {
-      const n = new Notification({ title: { newDevice: "New device", malware: "Malware blocked", tunnel: "Tunnel", bedtime: "Bedtime", system: "Cellowalla" }[p.kind] || "Cellowalla", body: p.text, icon: ICON });
+      const n = new Notification({ title: { newDevice: "New device", malware: "Malware blocked", tunnel: "Tunnel", bedtime: "Bedtime", system: "Cellowalla", plan: "Cellowalla" }[p.kind] || "Cellowalla", body: p.text, icon: ICON });
       n.on("click", show);
       n.show();
     }
@@ -137,7 +137,7 @@ async function checkPings() {
 function pause(minutes) {
   api("POST", "/api/shield/pause", { minutes })
     .then(() => new Notification({ title: "Cellowalla", body: minutes ? `Shield paused for ${minutes} minutes.` : "Shield is back on.", icon: ICON }).show())
-    .catch((e) => dialog.showErrorBox("Cellowalla", `${e.message}. Open Cellowalla and sign in.`));
+    .catch((e) => dialog.showErrorBox("Cellowalla", /^Cellowalla is locked/.test(e.message) ? e.message : `${e.message}. Open Cellowalla and sign in.`));
 }
 
 function buildMenu() {

@@ -6,16 +6,20 @@ is() { [[ "$1" == "$2" ]]; }
 real() { [[ -n "$1" && "$1" != "0.0.0.0" ]]; }
 q() { dig +short +time=5 +tries=3 "$@" | tail -1; }
 
+# A pretend CelloCloud on this machine (the box accepts one only on 127.0.0.1: src/cellocloud.js).
+node .github/fake-cellocloud.mjs >/tmp/fake-cellocloud.log 2>&1 &
+mkdir -p /etc/systemd/system/cellowalla.service.d
+printf '[Service]\nEnvironment=CELLOWALLA_CELLOCLOUD=http://127.0.0.1:18790\n' > /etc/systemd/system/cellowalla.service.d/ci-cellocloud.conf
+systemctl daemon-reload; systemctl restart cellowalla
+
 t "service running" systemctl is-active -q cellowalla
 for i in $(seq 1 90); do journalctl -u cellowalla --no-pager | grep -q '\[lists\] ads [1-9]' && break; sleep 2; done
 journalctl -u cellowalla --no-pager | grep '\[lists\]' | tail -1
+for i in $(seq 1 30); do real "$(q @127.0.0.1 example.com A)" && break; sleep 1; done
 
-t "ads blocked" is "$(q @127.0.0.1 doubleclick.net A)" 0.0.0.0
-t "names under a blocked one blocked" is "$(q @127.0.0.1 x.doubleclick.net A)" 0.0.0.0
-t "normal names answered" real "$(q @127.0.0.1 example.com A)"
-t "DNS over TCP" real "$(q +tcp @127.0.0.1 wikipedia.org A)"
-t "encrypted-DNS dodge blocked" is "$(q @127.0.0.1 dns.google A)" 0.0.0.0
-t "Firefox canary" bash -c 'dig @127.0.0.1 use-application-dns.net | grep -q NXDOMAIN'
+# A new box isn't signed in with CelloCloud yet: it doesn't protect, but the internet works.
+t "new box: names answered" real "$(q @127.0.0.1 example.com A)"
+t "new box: nothing blocked before the CelloCloud sign-in" real "$(q @127.0.0.1 doubleclick.net A)"
 t "firewall table loaded" nft list table inet cellowalla
 
 C=(-sk --fail-with-body -H 'x-cellowalla: 1' -H 'content-type: application/json' -b /tmp/jar -c /tmp/jar)
@@ -23,6 +27,16 @@ t "dashboard over https" bash -c "curl -sk https://127.0.0.1/api/hello | grep -q
 t "http redirects to https" is "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)" 301
 CODE=$(cat /var/lib/cellowalla/setup-code.txt)
 t "first-time setup" curl "${C[@]}" -o /dev/null -d "{\"code\":\"$CODE\",\"password\":\"ci-password-123\"}" https://127.0.0.1/api/setup
+OUT=$(curl "${C[@]}" -d '{"username":"ci","password":"wrong"}' https://127.0.0.1/api/cellocloud/login); t "CelloCloud: wrong password refused" grep -q '"code":"wrong_login"' <<<"$OUT"
+OUT=$(curl "${C[@]}" -d '{"username":"ci","password":"ci-cloud-password-1"}' https://127.0.0.1/api/cellocloud/login); t "CelloCloud sign-in" grep -q '"locked":false' <<<"$OUT"
+t "CelloCloud token kept for root only" bash -c '[[ $(stat -c %a /var/lib/cellowalla/cellocloud.json) == 600 ]] && ! grep -q ci-cloud-password /var/lib/cellowalla/cellocloud.json'
+
+t "ads blocked" is "$(q @127.0.0.1 doubleclick.net A)" 0.0.0.0
+t "names under a blocked one blocked" is "$(q @127.0.0.1 x.doubleclick.net A)" 0.0.0.0
+t "normal names answered" real "$(q @127.0.0.1 example.com A)"
+t "DNS over TCP" real "$(q +tcp @127.0.0.1 wikipedia.org A)"
+t "encrypted-DNS dodge blocked" is "$(q @127.0.0.1 dns.google A)" 0.0.0.0
+t "Firefox canary" bash -c 'dig @127.0.0.1 use-application-dns.net | grep -q NXDOMAIN'
 t "Clean Search on" curl "${C[@]}" -o /dev/null -X PUT -d '{"cleanSearch":true}' https://127.0.0.1/api/shield
 t "Clean Search answers" bash -c 'dig +short @127.0.0.1 www.google.com A | grep -q forcesafesearch'
 curl "${C[@]}" -o /dev/null -X PUT -d '{"cleanSearch":false}' https://127.0.0.1/api/shield
@@ -61,6 +75,21 @@ t "pause the pass" curl "${C[@]}" -o /dev/null -X PUT -d "{\"mac\":\"$MAC\",\"pa
 sleep 1
 t "paused device gets no answers" is "$(ip netns exec phone dig +short +time=5 @10.88.0.1 example.com A)" 0.0.0.0
 t "paused device in the firewall's cut set" bash -c 'nft list set inet cellowalla cut4 | grep -q 10.88.0.2'
+
+# The plan lock: a payment failed and wasn't fixed. Protection stops; nobody loses the internet.
+curl -s -o /dev/null -d "{\"allowed\":false,\"reason\":\"payment_failed\",\"message\":\"Your CelloCloud payment didn't go through.\",\"lockAt\":$(( $(date +%s) * 1000 - 1000 ))}" http://127.0.0.1:18790/_ci
+OUT=$(curl "${C[@]}" -X POST https://127.0.0.1/api/cellocloud/check); t "locked after payment_failed" grep -q '"locked":true' <<<"$OUT"
+sleep 1
+t "locked: ads not blocked" real "$(q @127.0.0.1 doubleclick.net A)"
+t "locked: the paused device gets answers" real "$(ip netns exec phone dig +short +time=5 +tries=3 @10.88.0.1 example.com A | tail -1)"
+t "locked: nobody in the firewall's cut set" bash -c '! nft list set inet cellowalla cut4 | grep -q 10.88.0.2'
+t "locked: settings refused" is "$(curl -sk -o /dev/null -w '%{http_code}' -H 'x-cellowalla: 1' -H 'content-type: application/json' -b /tmp/jar -X PUT -d '{"cleanSearch":true}' https://127.0.0.1/api/shield)" 423
+OUT=$(curl "${C[@]}" https://127.0.0.1/api/pings); t "Ping: Cellowalla is locked" grep -q 'Cellowalla is locked: Your CelloCloud payment' <<<"$OUT"
+curl -s -o /dev/null -d '{"allowed":true}' http://127.0.0.1:18790/_ci
+OUT=$(curl "${C[@]}" -X POST https://127.0.0.1/api/cellocloud/check); t "unlocked when paid" grep -q '"locked":false' <<<"$OUT"
+sleep 1
+t "unlocked: ads blocked again" is "$(q @127.0.0.1 doubleclick.net A)" 0.0.0.0
+t "unlocked: the paused device is cut again" bash -c 'nft list set inet cellowalla cut4 | grep -q 10.88.0.2'
 
 ip netns del phone; ip link del cwtest-h 2>/dev/null || true
 echo "all box checks passed"

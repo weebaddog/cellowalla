@@ -21,6 +21,9 @@ export function bedtimeOn(b, now) {
 export function rulesFor(state, device, now = new Date()) {
   const s = state.shield;
   const crew = device?.crew ? state.crews[device.crew] : null;
+  // Locked (the CelloCloud plan doesn't include Cellowalla now): no protection at all, but nobody is
+  // ever cut off either. Every device gets plain, unfiltered internet.
+  if (state.plan?.locked) return { shield: false, lists: [], cleanSearch: false, deny: [], allow: [], cut: null, crew: crew?.id || null, locked: true };
   const ms = now.getTime();
   const lists = Object.entries(s.lists).filter(([, on]) => on).map(([k]) => k);
   for (const c of s.custom) if (c.on) lists.push(`custom:${c.id}`);

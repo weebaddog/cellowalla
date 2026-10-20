@@ -69,6 +69,8 @@ Some internet-provider routers don't let you change the DNS. Then use Gatekeeper
 On your home Wi-Fi, open the Cellowalla app on your computer or phone, press
 "Find my box" (or type the address the installer showed), choose "Trust this box",
 then type the setup code and choose a password (10 characters or more).
+Then sign in with your CelloCloud account (Cellowalla comes with CelloCloud's 700 GB
+plan). Protection starts once the box is signed in; your internet works either way.
 
 You can also use a web browser: open https://<the box's address>. The browser will warn
 the connection isn't private; that's expected (the box made its own certificate).

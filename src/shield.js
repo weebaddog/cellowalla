@@ -74,7 +74,7 @@ export function createShield({ store, lists, roster, fetchImpl = fetch, log = co
     const data = store.data;
     const device = roster.byIp(ip);
     const rules = rulesFor(data, device);
-    if (!device && data.lobby.on && ip !== "127.0.0.1") rules.cut = "lobby"; // not met yet: waits like any newcomer
+    if (!device && data.lobby.on && ip !== "127.0.0.1" && !rules.locked) rules.cut = "lobby"; // not met yet: waits like any newcomer
     const entry = { t: Date.now(), ip, dev: device?.mac || null, name: q.name, type: q.type, v: "ok" };
     const done = (reply, verdict) => {
       entry.v = verdict;

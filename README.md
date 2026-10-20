@@ -7,6 +7,7 @@ A home network guard for a small Linux box (Raspberry Pi 4/5 or any mini PC runn
 - **House Rules**: **Crews** with extra blocking, bedtimes, pause, "30 more minutes"
 - **Tunnel**: WireGuard server with QR-code **passes**
 - **Pings**: alerts in the dashboard and to your phone through ntfy or a webhook
+- **CelloCloud plan**: comes with CelloCloud's 700 GB plan; the box signs in with a CelloCloud account and, if the plan lapses, stops protecting (the internet keeps working)
 - Two setups: **Lookout** (DNS only, plugs into your router) or **Gatekeeper** (two ports, the box is the router)
 
 Install on the box: `sudo bash install/install.sh` (step by step: `HOW-TO-INSTALL.txt`). The full user guide is `web/guide.html`, and the dashboard opens it from the ? button.

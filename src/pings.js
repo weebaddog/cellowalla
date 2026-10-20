@@ -4,7 +4,7 @@
 
 import { openFeed, newId } from "./state.js";
 
-const TITLES = { newDevice: "New device", tunnel: "Tunnel", malware: "Malware blocked", bedtime: "Bedtime", system: "Cellowalla" };
+const TITLES = { newDevice: "New device", tunnel: "Tunnel", malware: "Malware blocked", bedtime: "Bedtime", system: "Cellowalla", plan: "Cellowalla" };
 
 export function createPings({ store, dir, fetchImpl = fetch, log = console.log }) {
   const feed = openFeed(dir, "pings.json", 500);
@@ -13,7 +13,7 @@ export function createPings({ store, dir, fetchImpl = fetch, log = console.log }
   async function push(p) {
     const cfg = store.data.pings;
     const tasks = [];
-    if (cfg.ntfy) tasks.push(fetchImpl(cfg.ntfy, { method: "POST", body: p.text, headers: { title: `${TITLES[p.kind] || "Cellowalla"}`, tags: p.kind === "malware" ? "warning" : "shield" }, signal: AbortSignal.timeout(10_000) }));
+    if (cfg.ntfy) tasks.push(fetchImpl(cfg.ntfy, { method: "POST", body: p.text, headers: { title: `${TITLES[p.kind] || "Cellowalla"}`, tags: p.kind === "malware" || p.kind === "plan" ? "warning" : "shield" }, signal: AbortSignal.timeout(10_000) }));
     if (cfg.webhook) tasks.push(fetchImpl(cfg.webhook, { method: "POST", body: JSON.stringify({ kind: p.kind, title: TITLES[p.kind], text: p.text, at: p.at, ref: p.ref }), headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(10_000) }));
     for (const r of await Promise.allSettled(tasks)) if (r.status === "rejected") log(`[pings] couldn't send: ${r.reason?.message}`);
   }

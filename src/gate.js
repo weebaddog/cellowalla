@@ -133,8 +133,8 @@ export function createGate({ store, sys, log = console.log, onBedtime = () => {}
       if (r.cut === "lobby") lobby.push(d.ip); else if (r.cut) cut.push(d.ip);
       if (data.mode === "gatekeeper" || d.kind === "tunnel") counted.push(d.ip);
     }
-    // Bedtime starting/ending (for Pings).
-    for (const c of Object.values(data.crews)) {
+    // Bedtime starting/ending (for Pings). (Locked: House Rules are off, so no bedtime news either.)
+    if (!data.plan?.locked) for (const c of Object.values(data.crews)) {
       const on = Object.values(data.devices).some((d) => d.crew === c.id && rulesFor(data, d, now).cut === "bedtime");
       if (on && !bedtimeNow.has(c.id)) { bedtimeNow.add(c.id); onBedtime(c, true); }
       if (!on && bedtimeNow.delete(c.id)) onBedtime(c, false);

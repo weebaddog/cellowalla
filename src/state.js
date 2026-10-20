@@ -50,6 +50,12 @@ export const DEFAULTS = () => ({
   },
   traffic: {},                    // ip → { up, down } bytes counted so far (gatekeeper)
   updates: { auto: true },        // put in new versions (signed by the owner) by itself
+  plan: {                         // the CelloCloud plan check (cellocloud.js decides; the account itself is in cellocloud.json)
+    locked: false,                // true: no protection (unfiltered internet keeps working)
+    reason: null,
+    message: null,
+    notified: null,               // the last plan news sent as a Ping (so each one goes out once)
+  },
 });
 
 /** Fills in anything a newer version added, keeping what's there. */
