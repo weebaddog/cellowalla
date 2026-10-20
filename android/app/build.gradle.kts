@@ -11,14 +11,14 @@ val keystoreProps = Properties().apply {
 
 android {
     namespace = "com.cellowalla.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.cellowalla.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
     }
 
     signingConfigs {
@@ -48,5 +48,5 @@ android {
 }
 
 dependencies {
-    implementation("androidx.work:work-runtime:2.10.1")
+    implementation("androidx.work:work-runtime:2.12.0")
 }

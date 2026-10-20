@@ -72,8 +72,41 @@ class Box(context: Context) {
         override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
     }
 
+    /** What asking an address "are you a Cellowalla box?" found. [fp] is the certificate's fingerprint. */
+    class Hello(val ok: Boolean, val fp: String = "", val error: String = "")
+
     companion object {
         fun sha256(b: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+
+        /**
+         * GET /api/hello on [origin] (https). Only "who are you?": no cookie or password is sent, so
+         * any certificate is accepted here and its fingerprint is checked against the pin afterwards.
+         * Errors: "name", "refused", "notbox", "timeout".
+         */
+        fun hello(origin: String, timeoutMs: Int = 6000): Hello {
+            var seen = ""
+            val conn = runCatching { URL(origin.trimEnd('/') + "/api/hello").openConnection() as HttpsURLConnection }.getOrNull()
+                ?: return Hello(false, error = "notbox")
+            val ctx = SSLContext.getInstance("TLS")
+            ctx.init(null, arrayOf(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = throw CertificateException()
+                override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) { if (chain.isNotEmpty()) seen = sha256(chain[0].encoded) }
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }), null)
+            conn.sslSocketFactory = ctx.socketFactory
+            conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true } // nothing secret is sent
+            conn.connectTimeout = timeoutMs
+            conn.readTimeout = timeoutMs
+            return try {
+                val code = conn.responseCode
+                val text = (if (code < 400) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText().take(4096) } ?: ""
+                val ok = runCatching { JSONObject(text).has("setUp") }.getOrDefault(false)
+                if (ok) Hello(true, seen) else Hello(false, error = "notbox")
+            } catch (e: java.net.UnknownHostException) { Hello(false, error = "name")
+            } catch (e: java.net.ConnectException) { Hello(false, error = if (e.message?.contains("ECONNREFUSED") == true) "refused" else "timeout")
+            } catch (e: Exception) { Hello(false, error = "timeout")
+            } finally { conn.disconnect() }
+        }
 
         /** The fingerprint of a certificate WebView shows us. */
         fun fingerprint(c: SslCertificate): String? {

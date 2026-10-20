@@ -10,13 +10,14 @@
   <main>
     <img src="icon.png" alt="" width="72" height="72">
     <h1>Connect to your Cellowalla box</h1>
-    <p class="muted">Type the address the installer showed, for example <code>192.168.1.50</code>, or <code>cellowalla.lan</code> if your devices already use the box.</p>
+    <p class="muted">Type the address the installer showed, for example <code>192.168.1.50</code>, or <code>cellowalla.lan</code> if your devices already use the box. Not sure? Use Find my box.</p>
     <p id="error" class="error" role="alert"></p>
+    <p id="status" class="muted" role="status"></p>
     <form id="form">
       <input id="address" type="text" placeholder="192.168.1.50" autocomplete="off" spellcheck="false" autofocus>
-      <button type="submit">Connect</button>
+      <button type="submit" id="connect">Connect</button>
     </form>
-    <div class="chips"><button type="button" class="chip" data-a="cellowalla.lan">cellowalla.lan</button><button type="button" class="chip" data-a="192.168.50.1">192.168.50.1 (gatekeeper)</button></div>
+    <div class="chips" id="found"><button type="button" class="chip" id="find">Find my box</button><button type="button" class="chip" data-a="cellowalla.lan">cellowalla.lan</button><button type="button" class="chip" data-a="192.168.50.1" title="Only when the box runs your network (Gatekeeper mode)">192.168.50.1 (Gatekeeper mode)</button></div>
     <div class="chips theme" role="radiogroup" aria-label="Theme"><button type="button" class="chip" data-theme="auto">Auto</button><button type="button" class="chip" data-theme="light">Light</button><button type="button" class="chip" data-theme="dark">Dark</button></div>
     <p class="muted small">Don't have a box yet? Cellowalla runs on a Raspberry Pi or any small Linux computer. See the user guide in the cellowalla folder (web/guide.html).</p>
   </main>

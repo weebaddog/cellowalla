@@ -9,6 +9,7 @@ if (location.protocol !== "file:") {
 } else {
   contextBridge.exposeInMainWorld("cellowallaDesktop", {
     connect: (address) => ipcRenderer.invoke("cellowalla:connect", address),
+    find: () => ipcRenderer.invoke("cellowalla:find"),
     current: () => ipcRenderer.invoke("cellowalla:current"),
     theme: () => ipcRenderer.invoke("cellowalla:get-theme"),
     themeChanged: (mode) => ipcRenderer.send("cellowalla:theme", String(mode)),

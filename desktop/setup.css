@@ -15,4 +15,5 @@ button[type=submit] { font: inherit; font-weight: 600; background: var(--brand);
 .chips { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
 .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
 .chips.theme { margin-top: 28px; }
+button:disabled { opacity: .55; cursor: progress; }
 .chip { font: inherit; font-size: 13px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; cursor: pointer; }

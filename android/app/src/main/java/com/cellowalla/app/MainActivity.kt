@@ -59,7 +59,10 @@ class MainActivity : Activity() {
             insets
         }
         setContentView(root)
-        if (box.url.isEmpty()) showSetup(null) else showDashboard()
+        // A saved box is checked from the setup screen first, so an unreachable one shows
+        // "Connecting…" and then a clear message instead of a blank screen.
+        showSetup(null)
+        if (box.url.isNotEmpty()) connect(box.url)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
@@ -80,41 +83,145 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private var errorView: TextView? = null
+    private var statusView: TextView? = null
+    private var input: EditText? = null
+    private var foundRow: LinearLayout? = null
+    private val busyButtons = mutableListOf<Button>()
+    private var busy = false
+
     private fun showSetup(error: String?) {
-        web?.destroy(); web = null
+        // Never destroy the WebView from inside one of its own callbacks: do it after.
+        web?.let { w -> web = null; root.post { w.destroy() } }
+        updateBack()
+        busy = false
         actionBar?.title = "Cellowalla"
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(32), dp(24), dp(24)) }
         col.addView(TextView(this).apply { text = "Connect to your Cellowalla box"; textSize = 22f; setTextAppearance(android.R.style.TextAppearance_Material_Headline) })
         col.addView(TextView(this).apply {
-            text = "Type the address the installer showed, for example 192.168.1.50, or cellowalla.lan if this phone already uses the box. You must be on your home Wi-Fi (or connected through the Tunnel)."
+            text = "Type the address the installer showed, for example 192.168.1.50, or cellowalla.lan if this phone already uses the box. Not sure? Use Find my box. You must be on your home Wi-Fi (or connected through the Tunnel)."
             setPadding(0, dp(8), 0, dp(16)); textSize = 15f
         })
-        if (error != null) col.addView(TextView(this).apply { text = error; setTextColor(Color.rgb(229, 72, 63)); setPadding(0, 0, 0, dp(12)) })
-        val input = EditText(this).apply {
+        errorView = TextView(this).apply { text = error ?: ""; setTextColor(Color.rgb(229, 72, 63)); setPadding(0, 0, 0, dp(12)); visibility = if (error == null) View.GONE else View.VISIBLE }
+        col.addView(errorView)
+        statusView = TextView(this).apply { setPadding(0, 0, 0, dp(12)); visibility = View.GONE }
+        col.addView(statusView)
+        val field = EditText(this).apply {
             hint = "192.168.1.50"; setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
             setText(box.url.removePrefix("https://"))
         }
-        col.addView(input)
-        val connect = { connect(input.text.toString()) }
-        input.setOnEditorActionListener { _, _, _ -> connect(); true }
-        col.addView(Button(this).apply { text = "Connect"; setOnClickListener { connect() } })
+        input = field
+        col.addView(field)
+        // (Enter on a hardware keyboard sends both a key-down and a key-up: act once.)
+        field.setOnEditorActionListener { _, action, ev -> if (ev == null || ev.action == android.view.KeyEvent.ACTION_DOWN) connect(field.text.toString()); action == EditorInfo.IME_ACTION_GO || ev != null }
+        busyButtons.clear()
+        col.addView(Button(this).apply { text = "Connect"; setOnClickListener { connect(field.text.toString()) } }.also { busyButtons += it })
+        col.addView(Button(this).apply { text = "Find my box"; setOnClickListener { findBox() } }.also { busyButtons += it })
+        foundRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(foundRow)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.START }
-        for (a in listOf("cellowalla.lan", "192.168.50.1")) row.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply { text = a; isAllCaps = false; setOnClickListener { input.setText(a) } })
+        for ((a, label) in listOf("cellowalla.lan" to "cellowalla.lan", "192.168.50.1" to "192.168.50.1 (Gatekeeper mode)")) {
+            row.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply { text = label; isAllCaps = false; setOnClickListener { field.setText(a) } })
+        }
         col.addView(row)
         root.removeAllViews()
         root.addView(ScrollView(this).apply { addView(col) })
     }
 
+    private fun setBusy(text: String?) {
+        busy = text != null
+        statusView?.apply { this.text = text ?: ""; visibility = if (text == null) View.GONE else View.VISIBLE }
+        for (b in busyButtons) b.isEnabled = !busy
+    }
+
+    private fun showError(text: String?) {
+        errorView?.apply { this.text = text ?: ""; visibility = if (text == null) View.GONE else View.VISIBLE }
+    }
+
+    private val gone get() = isFinishing || isDestroyed
+
+    /** This phone's own IPv4 networks ("192.168.1"), for hints and for Find my box. */
+    private fun localNets(): List<String> = runCatching {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java)
+        val home = listOf(android.net.NetworkCapabilities.TRANSPORT_WIFI, android.net.NetworkCapabilities.TRANSPORT_ETHERNET, android.net.NetworkCapabilities.TRANSPORT_VPN)
+        @Suppress("DEPRECATION") cm.allNetworks
+            .filter { n -> cm.getNetworkCapabilities(n)?.let { c -> home.any { c.hasTransport(it) } } == true } // never mobile data
+            .mapNotNull { cm.getLinkProperties(it) }.flatMap { it.linkAddresses }
+            .map { it.address }.filterIsInstance<java.net.Inet4Address>()
+            .filter { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+            .map { it.hostAddress!!.substringBeforeLast('.') }.distinct()
+    }.getOrDefault(emptyList())
+
+    private fun whyNot(host: String, error: String): String {
+        val nets = localNets()
+        val here = if (nets.isNotEmpty()) " This phone is on ${nets.joinToString(" and ") { "$it.x" }}, so your box's address usually starts with ${nets[0]}." else " This phone isn't on Wi-Fi right now."
+        return when (error) {
+            "name" -> "This phone can't find \"$host\". That name only works once your devices use the box for DNS: type the box's number address instead, or use Find my box."
+            "notbox" -> "Something answered at $host, but it isn't a Cellowalla box (it may be your router).$here Try Find my box."
+            "refused" -> "$host is there but isn't running Cellowalla's dashboard. Check the box finished installing."
+            else -> "Nothing answered at $host. Make sure the box is switched on and this phone is on the same Wi-Fi.$here Try Find my box."
+        }
+    }
+
     private fun connect(address: String) {
+        if (busy) return
         val a = address.trim()
         if (a.isEmpty()) return
-        val url = runCatching { Uri.parse(if (a.startsWith("http://") || a.startsWith("https://")) a else "https://$a") }.getOrNull()
-        if (url?.host.isNullOrEmpty()) { toast("That doesn't look like an address."); return }
-        val origin = "${url!!.scheme}://${url.host}${if (url.port > 0) ":${url.port}" else ""}"
-        if (Uri.parse(box.url).host != url.host) box.pin = ""
-        box.url = origin
-        showDashboard()
+        val url = runCatching { Uri.parse(if (a.startsWith("http://") || a.startsWith("https://")) a.replaceFirst("http://", "https://") else "https://$a") }.getOrNull()
+        if (url?.host.isNullOrEmpty()) { showError("That doesn't look like an address."); return }
+        val hostPort = "${url!!.host}${if (url.port > 0) ":${url.port}" else ""}"
+        val origin = "https://$hostPort"
+        showError(null)
+        setBusy("Connecting to $hostPort…")
+        Thread {
+            val r = Box.hello(origin)
+            runOnUiThread {
+                if (gone) return@runOnUiThread
+                setBusy(null)
+                if (!r.ok) { showError(whyNot(hostPort, r.error)); return@runOnUiThread }
+                val pinned = if (Uri.parse(box.url).host == url.host) box.pin else ""
+                when {
+                    pinned.isNotEmpty() && pinned != r.fp -> showError("$hostPort's certificate changed. If you didn't reinstall Cellowalla, something may be pretending to be your box, so the connection was refused.\n\nTo trust the new certificate, use Change box in the menu and connect again.")
+                    pinned.isNotEmpty() -> { box.url = origin; showDashboard() }
+                    else -> AlertDialog.Builder(this)
+                        .setTitle("First connection to $hostPort")
+                        .setMessage("Your box made its own certificate, so your phone can't vouch for it. If this is your Cellowalla box, trust it once; after that only this exact certificate is accepted.\n\nFingerprint:\n${Box.pretty(r.fp)}")
+                        .setPositiveButton("Trust this box") { _, _ -> box.url = origin; box.pin = r.fp; showDashboard() }
+                        .setNegativeButton("Cancel") { _, _ -> showError("Not connected: the box's certificate wasn't trusted.") }
+                        .setCancelable(false)
+                        .show()
+                }
+            }
+        }.start()
+    }
+
+    /** Find my box: asks every address on the phone's own networks (and cellowalla.lan) at once. */
+    private fun findBox() {
+        if (busy) return
+        showError(null)
+        foundRow?.removeAllViews()
+        val nets = localNets().take(2)
+        if (nets.isEmpty()) { showError("This phone isn't on Wi-Fi. Join your home Wi-Fi (the one the box is on) and try again."); return }
+        setBusy("Looking for your box on this network… (up to 10 seconds)")
+        Thread {
+            val candidates = listOf("cellowalla.lan") + nets.flatMap { n -> (1..254).map { "$n.$it" } }
+            val found = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(64)
+            for (h in candidates) pool.execute { if (Box.hello("https://$h", 1500).ok) found += h }
+            pool.shutdown()
+            pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)
+            runOnUiThread {
+                if (gone) return@runOnUiThread
+                setBusy(null)
+                if (found.isEmpty()) {
+                    showError("No Cellowalla box answered on ${nets.joinToString(" or ") { "$it.x" }}. Check the box is switched on and on the same Wi-Fi as this phone.")
+                    return@runOnUiThread
+                }
+                statusView?.apply { text = if (found.size == 1) "Found your box. Tap it to connect." else "Found these boxes. Tap yours to connect."; visibility = View.VISIBLE }
+                for (h in found.sorted()) foundRow?.addView(Button(this).apply { text = "Box at $h"; isAllCaps = false; setOnClickListener { input?.setText(h); connect(h) } })
+            }
+        }.start()
     }
 
     // ---- the dashboard -----------------------------------------------------------------------------
@@ -122,6 +229,7 @@ class MainActivity : Activity() {
     @Suppress("SetJavaScriptEnabled")
     private fun showDashboard() {
         actionBar?.title = "Cellowalla"
+        web?.let { old -> root.post { old.destroy() } }
         val w = WebView(this)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
@@ -140,32 +248,26 @@ class MainActivity : Activity() {
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                 val fp = error.certificate?.let { Box.fingerprint(it) }
                 if (Uri.parse(error.url).host != box.host || fp == null) { handler.cancel(); return }
-                when {
-                    box.pin == fp -> handler.proceed()
-                    box.pin.isEmpty() -> AlertDialog.Builder(this@MainActivity)
-                        .setTitle("First connection to ${box.host}")
-                        .setMessage("Your box made its own certificate, so your phone can't vouch for it. If this is your Cellowalla box, trust it once; after that only this exact certificate is accepted.\n\nFingerprint:\n${Box.pretty(fp)}")
-                        .setPositiveButton("Trust this box") { _, _ -> box.pin = fp; handler.proceed() }
-                        .setNegativeButton("Cancel") { _, _ -> handler.cancel(); showSetup(null) }
-                        .setCancelable(false)
-                        .show()
-                    else -> {
-                        handler.cancel()
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("This box's certificate changed")
-                            .setMessage("If you didn't reinstall Cellowalla, something may be pretending to be your box, so the connection was refused.\n\nTo trust the new certificate, use Change box in the menu and connect again.")
-                            .setPositiveButton("OK", null)
-                            .show()
-                    }
+                // connect() already asked about this certificate; only the trusted one gets through.
+                if (box.pin.isNotEmpty() && box.pin == fp) { handler.proceed(); return }
+                handler.cancel()
+                view.post {
+                    if (gone) return@post
+                    showSetup(if (box.pin.isEmpty()) null else "This box's certificate changed. If you didn't reinstall Cellowalla, something may be pretending to be your box, so the connection was refused.\n\nTo trust the new certificate, use Change box in the menu and connect again.")
                 }
             }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) { updateBack() }
 
             override fun onPageFinished(view: WebView, url: String) {
                 view.evaluateJavascript("window.cwSetTheme && window.cwSetTheme('$themeMode', true)", null) // the app's choice wins
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame && error.errorCode != ERROR_FAILED_SSL_HANDSHAKE) showSetup("Couldn't reach ${box.url} (${error.description}).")
+                if (request.isForMainFrame && error.errorCode != ERROR_FAILED_SSL_HANDSHAKE) {
+                    val msg = "Couldn't reach ${box.url} (${error.description})."
+                    view.post { if (!gone && web === view) showSetup(msg) }
+                }
             }
         }
         web = w
@@ -241,7 +343,7 @@ class MainActivity : Activity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
-            1 -> if (web != null) web?.reload() else showDashboard()
+            1 -> if (web != null) web?.reload() else if (box.url.isNotEmpty()) connect(box.url)
             2 -> pause(15)
             3 -> pause(0)
             4 -> { box.url = ""; box.pin = ""; showSetup(null) }
@@ -261,7 +363,26 @@ class MainActivity : Activity() {
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
-    @Deprecated("Back goes back in the dashboard first")
+    // Back goes back in the dashboard first. Android 13+ (and every back gesture on Android 16) uses
+    // the back dispatcher: the callback is only registered while the dashboard has somewhere to go back to.
+    private var backCallback: Any? = null
+
+    private fun updateBack() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val want = web?.canGoBack() == true
+        val have = backCallback != null
+        if (want && !have) {
+            val cb = android.window.OnBackInvokedCallback { web?.let { if (it.canGoBack()) it.goBack() }; updateBack() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
+            backCallback = cb
+        } else if (!want && have) {
+            onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCallback as android.window.OnBackInvokedCallback)
+            backCallback = null
+        }
+    }
+
+    @Deprecated("Android 12 and older; newer versions use updateBack()")
+    @Suppress("GestureBackNavigation")
     override fun onBackPressed() {
         val w = web
         if (w != null && w.canGoBack()) w.goBack() else @Suppress("DEPRECATION") super.onBackPressed()

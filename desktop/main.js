@@ -7,6 +7,9 @@
 const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, session, shell, nativeImage, nativeTheme } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const https = require("node:https");
+const os = require("node:os");
+const crypto = require("node:crypto");
 
 const ICON = path.join(__dirname, "icon.png");
 if (process.env.CELLOWALLA_PROFILE && !app.isPackaged) app.setPath("userData", process.env.CELLOWALLA_PROFILE); // (testing)
@@ -49,10 +52,17 @@ function createWindow() {
     e.preventDefault(); shell.openExternal(url);
   });
   win.webContents.on("did-fail-load", (_e, code, desc, url, isMain) => {
-    if (isMain && code !== -3) win.loadFile(path.join(__dirname, "setup.html"), { query: { error: `Couldn't reach ${config.box} (${desc}).`, box: config.box } });
+    if (!isMain || code === -3) return;
+    showSetup({ error: `Couldn't reach ${config.box} (${desc}).`, box: config.box });
   });
   win.webContents.on("did-finish-load", () => pushTheme());
-  if (config.box) win.loadURL(config.box); else win.loadFile(path.join(__dirname, "setup.html"));
+  // A saved box is checked from the setup page first, so an unreachable one shows "Connecting…" and
+  // then a clear message instead of a blank window for half a minute.
+  showSetup(config.box ? { auto: "1", box: config.box } : {});
+}
+
+function showSetup(query = {}) {
+  win.loadFile(path.join(__dirname, "setup.html"), { query }).catch(() => {});
 }
 
 // ---- Light / Dark / Auto ------------------------------------------------------------------------------
@@ -79,20 +89,20 @@ function trustBox() {
   session.defaultSession.setCertificateVerifyProc((req, done) => {
     if (req.hostname !== boxHost()) return done(-3); // everything else: normal checks
     if (req.verificationResult === "net::OK") return done(0);
-    const fp = req.certificate.fingerprint; // "sha256/…"
-    if (config.fingerprint && config.fingerprint === fp) return done(0);
-    if (config.fingerprint && config.fingerprint !== fp) {
-      dialog.showMessageBox({ type: "warning", title: "Cellowalla", message: "This box's certificate changed.",
-        detail: `If you didn't reinstall Cellowalla, something may be pretending to be your box. Connection refused.\n\nExpected ${config.fingerprint}\nGot ${fp}\n\nTo trust the new one, use "Change box…" in the tray menu and connect again.` });
-      return done(-2);
-    }
-    const choice = dialog.showMessageBoxSync({ type: "question", buttons: ["Trust this box", "Cancel"], defaultId: 0, cancelId: 1, title: "Cellowalla",
-      message: `First connection to ${req.hostname}`,
-      detail: `Your box made its own certificate, so your computer can't vouch for it. If this is your Cellowalla box, trust it once; after that only this exact certificate is accepted.\n\nFingerprint:\n${fp}` });
-    if (choice !== 0) return done(-2);
-    config.fingerprint = fp; saveConfig();
-    done(0);
+    // The connect check below already asked about this certificate, so this never has to wait for
+    // a person (a modal *sync* question here froze the app and Chromium's network service crashed).
+    if (config.fingerprint && config.fingerprint === req.certificate.fingerprint) return done(0);
+    done(-2);
   });
+}
+
+/** Asks once whether to trust the box's own certificate; resolves true when trusted. */
+async function askTrust(host, fp) {
+  const opts = { type: "question", buttons: ["Trust this box", "Cancel"], defaultId: 0, cancelId: 1, title: "Cellowalla",
+    message: `First connection to ${host}`,
+    detail: `Your box made its own certificate, so your computer can't vouch for it. If this is your Cellowalla box, trust it once; after that only this exact certificate is accepted.\n\nFingerprint:\n${fp}` };
+  const { response } = await (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts));
+  return response === 0;
 }
 
 // ---- talking to the box from the tray (same sign-in as the window) ---------------------------------
@@ -137,7 +147,7 @@ function buildMenu() {
     { label: "Resume Shield", enabled: signedIn, click: () => pause(0) },
     { type: "separator" },
     { label: "Appearance", submenu: Object.entries(THEMES).map(([k, label]) => ({ label, type: "radio", checked: (config.theme || "auto") === k, click: () => setTheme(k) })) },
-    { label: "Change box…", click: () => { config.box = ""; config.fingerprint = ""; saveConfig(); show(); win.loadFile(path.join(__dirname, "setup.html")); } },
+    { label: "Change box…", click: () => { config.box = ""; config.fingerprint = ""; saveConfig(); show(); showSetup(); } },
     { label: "Start when I sign in", type: "checkbox", checked: !!config.autostart, click: (i) => setAutostart(i.checked) },
     { type: "separator" },
     { label: "Quit", click: () => { quitting = true; app.quit(); } },
@@ -158,15 +168,84 @@ function setAutostart(on) {
 
 // ---- the setup page asks for the box's address -------------------------------------------------------
 
-ipcMain.handle("cellowalla:connect", (_e, address) => {
+// Asks an address whether it's a Cellowalla box (GET /api/hello), before the window goes there. This
+// is only "who are you?": no cookie or password is sent, so the certificate is checked afterwards,
+// by the trust-on-first-use step, when the dashboard itself loads.
+function hello(origin, timeout = 6000) {
+  return new Promise((resolve) => {
+    let u;
+    try { u = new URL("/api/hello", origin); } catch { return resolve({ error: "bad" }); }
+    if (u.protocol !== "https:") return resolve({ error: "http" });
+    const req = https.get(u, { rejectUnauthorized: false, timeout, headers: { accept: "application/json" } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { if (text.length < 4096) text += d; });
+      // Same form as Electron's certificate.fingerprint: "sha256/<base64>".
+      const raw = res.socket.getPeerCertificate?.()?.raw;
+      const fp = raw ? "sha256/" + crypto.createHash("sha256").update(raw).digest("base64") : "";
+      res.on("end", () => {
+        try { const j = JSON.parse(text); if (typeof j.setUp === "boolean") return resolve({ ok: true, fp }); } catch { /* not JSON */ }
+        resolve({ error: "notbox" });
+      });
+    });
+    req.on("timeout", () => { req.destroy(); resolve({ error: "timeout" }); });
+    req.on("error", (e) => resolve({ error: e.code === "ENOTFOUND" || e.code === "EAI_AGAIN" ? "name" : e.code === "ECONNREFUSED" ? "refused" : "timeout" }));
+  });
+}
+
+/** This computer's own IPv4 networks ("192.168.253"), for hints and for Find my box. */
+function localNets() {
+  const nets = new Set();
+  for (const list of Object.values(os.networkInterfaces())) for (const a of list || []) {
+    if (a.family === "IPv4" && !a.internal && !a.address.startsWith("169.254.")) nets.add(a.address.split(".").slice(0, 3).join("."));
+  }
+  return [...nets];
+}
+
+function whyNot(host, error) {
+  const nets = localNets();
+  const here = nets.length ? ` This computer is on ${nets.map((n) => `${n}.x`).join(" and ")}, so your box's address usually starts with ${nets[0]}.` : "";
+  if (error === "name") return `This computer can't find "${host}". That name only works once your devices use the box for DNS: type the box's number address instead, or use Find my box.`;
+  if (error === "notbox") return `Something answered at ${host}, but it isn't a Cellowalla box (it may be your router).${here} Try Find my box.`;
+  if (error === "refused") return `${host} is there but isn't running Cellowalla's dashboard. Check the box finished installing.`;
+  return `Nothing answered at ${host}. Make sure the box is switched on and this computer is on the same Wi-Fi.${here} Try Find my box.`;
+}
+
+ipcMain.handle("cellowalla:connect", async (_e, address) => {
   let url;
-  try { url = new URL(/^https?:\/\//i.test(address) ? address : `https://${address}`); } catch { return { error: "That doesn't look like an address." }; }
-  if (url.hostname !== boxHost()) config.fingerprint = "";
-  config.box = url.origin; saveConfig();
-  win.loadURL(config.box);
+  const a = String(address || "").trim();
+  try { url = new URL(/^https?:\/\//i.test(a) ? a.replace(/^http:/i, "https:") : `https://${a}`); } catch { return { error: "That doesn't look like an address." }; }
+  if (!url.hostname) return { error: "That doesn't look like an address." };
+  const r = await hello(url.origin);
+  if (!r.ok) return { error: whyNot(url.host, r.error) };
+  const pinned = url.hostname === boxHost() ? config.fingerprint : "";
+  if (pinned && r.fp !== pinned) {
+    return { error: `${url.host}'s certificate changed. If you didn't reinstall Cellowalla, something may be pretending to be your box, so the connection was refused. To trust the new one, use "Change box…" in the tray menu and connect again.` };
+  }
+  if (!pinned) {
+    if (!r.fp || !(await askTrust(url.host, r.fp))) return { error: "Not connected: the box's certificate wasn't trusted." };
+  }
+  config.box = url.origin; config.fingerprint = pinned || r.fp; saveConfig();
+  win.loadURL(config.box).catch(() => {}); // a failure lands in did-fail-load
   return { ok: true };
 });
 ipcMain.handle("cellowalla:current", () => config.box);
+
+// Find my box: asks every address on this computer's own networks (and cellowalla.lan) at once.
+ipcMain.handle("cellowalla:find", async () => {
+  const candidates = ["cellowalla.lan"];
+  for (const n of localNets().slice(0, 4)) for (let i = 1; i < 255; i++) candidates.push(`${n}.${i}`);
+  const found = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < candidates.length) {
+      const h = candidates[next++];
+      if ((await hello(`https://${h}`, 1500)).ok) found.push(h);
+    }
+  };
+  await Promise.all(Array.from({ length: 128 }, worker));
+  return { found, nets: localNets() };
+});
 
 app.whenReady().then(() => {
   if (process.platform === "win32") app.setAppUserModelId("com.cellowalla.desktop");
