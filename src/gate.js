@@ -10,6 +10,7 @@ import { rulesFor } from "./policy.js";
 import { tunnelNet } from "./tunnel.js";
 
 const DNSMASQ = "/etc/dnsmasq.d/cellowalla.conf";
+const NFT_FILE = "/etc/nftables.d/cellowalla.nft";
 const q = (s) => `"${String(s).replace(/[^A-Za-z0-9_.:-]/g, "")}"`;
 const cname = (ip) => ip.replace(/[.:]/g, "_");
 const isIp4 = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s || "");
@@ -166,8 +167,8 @@ export function createGate({ store, sys, log = console.log, onBedtime = () => {}
         for (const [ip, c] of Object.entries(current)) { const t = (s.traffic[ip] ||= { up: 0, down: 0 }); t.up += c.up; t.down += c.down; }
       });
       current = {}; lastRead = 0;
-      sys.writeFile("/etc/nftables.d/cellowalla.nft", text);
-      try { await sys.run("nft", ["-f", "-"], { input: text }); applied = text; }
+      sys.writeFile(NFT_FILE, text);
+      try { await sys.run("nft", ["-f", NFT_FILE]); applied = text; } // (newer nft refuses -f - from a pipe)
       catch (e) { log(`[gate] nft: ${e.message}`); throw e; }
     }
     if (data.mode === "gatekeeper") {
