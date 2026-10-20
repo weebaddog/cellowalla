@@ -18,6 +18,7 @@ import { createGate } from "./gate.js";
 import { createTunnel } from "./tunnel.js";
 import { createPings } from "./pings.js";
 import { createWeb } from "./web.js";
+import { createUpdater } from "./update.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
@@ -42,7 +43,7 @@ function lanAddress(ifname) {
   return { ip: v4.address, cidr: `${ipn.map((x, i) => x & m[i]).join(".")}/${bits}` };
 }
 
-export async function createApp({ dataDir, fetchImpl = fetch, log = console.log, dry } = {}) {
+export async function createApp({ dataDir, fetchImpl = fetch, log = console.log, dry, update = {} } = {}) {
   dataDir ||= process.env.CELLOWALLA_DATA || "/var/lib/cellowalla";
   const store = openState(dataDir);
   const sys = createSys({ dataDir, log, ...(dry !== undefined ? { dry } : {}) });
@@ -66,6 +67,8 @@ export async function createApp({ dataDir, fetchImpl = fetch, log = console.log,
     onMalware: (d, ip, name) => app.pings.send("malware", `${label(d) || ip} tried to reach ${name}, a known malware or scam site. Shield stopped it.`, { ref: d?.mac || ip, once: `mw:${d?.mac || ip}` }) });
   app.gate = createGate({ store, sys, log, onBedtime: (c, on) => app.pings.send("bedtime", on ? `Bedtime started for ${c.name}.` : `Bedtime is over for ${c.name}.`, { ref: c.id }) });
   app.tunnel = createTunnel({ store, sys, fetchImpl, log, onConnect: (p, l) => app.pings.send("tunnel", `${p.name} connected through the Tunnel${l?.endpoint ? ` from ${l.endpoint.replace(/:\d+$/, "")}` : ""}.`, { ref: p.id, once: `tn:${p.id}` }) });
+
+  app.updater = createUpdater({ store, version: VERSION, dataDir, sys, fetchImpl, log, pings: app.pings, ...update });
 
   let refreshing = null;
   app.refreshLists = () => (refreshing ||= app.lists.refresh(store.data.shield.custom).finally(() => { refreshing = null; app.shield.clearCache(); }));
@@ -91,8 +94,10 @@ export async function createApp({ dataDir, fetchImpl = fetch, log = console.log,
     every(5 * 60_000, async () => app.roster.sweep());
     every(24 * 3600_000, () => app.refreshLists());
     setTimeout(() => app.roster.sweep(), 5000).unref();
+    stopUpdates = app.updater.start();
   };
-  app.stop = () => { for (const t of timers) clearInterval(t); app.shield.close(); app.web?.close(); store.flush(); app.pings.flush(); };
+  let stopUpdates = () => {};
+  app.stop = () => { for (const t of timers) clearInterval(t); stopUpdates(); app.shield.close(); app.web?.close(); store.flush(); app.pings.flush(); };
   return app;
 }
 

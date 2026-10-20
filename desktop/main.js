@@ -10,6 +10,8 @@ const fs = require("node:fs");
 const https = require("node:https");
 const os = require("node:os");
 const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
+const { signedRelease, newer, saveVerified, downloadUrl, installCommand, SITE } = require("./updates.js");
 
 const ICON = path.join(__dirname, "icon.png");
 if (process.env.CELLOWALLA_PROFILE && !app.isPackaged) app.setPath("userData", process.env.CELLOWALLA_PROFILE); // (testing)
@@ -42,6 +44,7 @@ function createWindow() {
   });
   win.removeMenu();
   win.on("close", (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });
+  win.on("hide", () => { if (update.ready && autoUpdate()) installUpdate(true); }); // nobody's looking: a good moment
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://") || url.startsWith("http://")) shell.openExternal(url);
     return { action: "deny" };
@@ -149,10 +152,73 @@ function buildMenu() {
     { label: "Appearance", submenu: Object.entries(THEMES).map(([k, label]) => ({ label, type: "radio", checked: (config.theme || "auto") === k, click: () => setTheme(k) })) },
     { label: "Change box…", click: () => { config.box = ""; config.fingerprint = ""; saveConfig(); show(); showSetup(); } },
     { label: "Start when I sign in", type: "checkbox", checked: !!config.autostart, click: (i) => setAutostart(i.checked) },
+    { label: "Update automatically", type: "checkbox", checked: autoUpdate(), click: (i) => setAutoUpdate(i.checked) },
+    update.ready ? { label: `Restart to update (${update.ready.version})`, click: () => installUpdate(false) }
+      : { label: "Check for updates", click: async () => {
+        const s = await checkUpdates();
+        if (!s.ready) dialog.showMessageBox({ type: "info", title: "Cellowalla", message: s.error ? `Couldn't check for updates: ${s.error}` : s.latest && newer(s.latest, s.current) ? `Cellowalla ${s.latest} is out.` : `Cellowalla ${s.current} is the newest version.` });
+      } },
     { type: "separator" },
     { label: "Quit", click: () => { quitting = true; app.quit(); } },
   ]));
 }
+
+// ---- automatic updates (only versions signed by the owner: see updates.js) ---------------------------
+
+const UPDATE_NAME = process.platform === "win32" ? "cellowallaWindows" : "cellowallaLinux";
+const update = { ready: null, latest: null, checkedAt: 0, error: null, told: "" };
+const autoUpdate = () => config.autoUpdate !== false;
+const updateStatus = () => ({ auto: autoUpdate(), current: app.getVersion(), latest: update.latest, ready: update.ready?.version || null,
+  checkedAt: update.checkedAt, error: update.error, canInstall: app.isPackaged && (process.platform === "win32" || !!process.env.APPIMAGE) });
+
+async function checkUpdates() {
+  try {
+    const res = await fetch(`${SITE}/release.json`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`release list: HTTP ${res.status}`);
+    const r = signedRelease(await res.text(), UPDATE_NAME);
+    update.checkedAt = Date.now(); update.latest = r?.version || null; update.error = null;
+    if (!r || !newer(r.version, app.getVersion()) || update.ready?.version === r.version) return updateStatus();
+    if (!updateStatus().canInstall) {
+      // (a .deb copy, or running from source: say so once per version)
+      if (update.told !== r.version) { update.told = r.version; new Notification({ title: "Cellowalla update", body: `Cellowalla ${r.version} is out. Get it from ${SITE}/download/Cellowalla.deb (or the AppImage, which updates itself).`, icon: ICON }).show(); }
+      return updateStatus();
+    }
+    const file = process.platform === "win32" ? path.join(app.getPath("temp"), `Cellowalla-Setup-${r.version}.exe`) : `${process.env.APPIMAGE}.new`;
+    await saveVerified(await fetch(downloadUrl(r)), file, r);
+    update.ready = { version: r.version, file };
+    if (!win || !win.isVisible()) installUpdate(true);
+    else new Notification({ title: "Cellowalla update ready", body: `Version ${r.version} goes in when you close the window, or choose "Restart to update" in the tray menu.`, icon: ICON }).show();
+  } catch (e) {
+    update.error = e.message;
+  } finally { buildMenu(); }
+  return updateStatus();
+}
+
+function installUpdate(hidden) {
+  const u = update.ready;
+  if (!u) return;
+  quitting = true;
+  if (process.platform === "win32") {
+    const [cmd, args] = installCommand(u.file, process.execPath, hidden);
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsVerbatimArguments: true, windowsHide: true }).unref();
+  } else {
+    fs.renameSync(u.file, process.env.APPIMAGE); // the AppImage replaces itself
+    app.relaunch({ args: hidden ? ["--hidden"] : [] });
+  }
+  app.quit();
+}
+
+function setAutoUpdate(on) {
+  config.autoUpdate = !!on; saveConfig(); buildMenu();
+  if (on) checkUpdates();
+  return updateStatus();
+}
+
+// The dashboard's Settings shows this app's own Updates switch too (through preload.js).
+ipcMain.handle("cellowalla:updates", () => updateStatus());
+ipcMain.handle("cellowalla:set-auto-update", (_e, on) => setAutoUpdate(on));
+ipcMain.handle("cellowalla:check-updates", () => checkUpdates());
+ipcMain.on("cellowalla:install-update", () => installUpdate(false));
 
 function setAutostart(on) {
   config.autostart = on; saveConfig();
@@ -258,6 +324,10 @@ app.whenReady().then(() => {
   createWindow();
   setInterval(checkPings, 60_000);
   setTimeout(checkPings, 8000);
+  // Updates: a minute after starting, then every 6 hours, while the switch is on.
+  const maybeUpdate = () => { if (autoUpdate() && app.isPackaged) checkUpdates(); };
+  setTimeout(maybeUpdate, 60_000);
+  setInterval(maybeUpdate, 6 * 3600_000);
 });
 app.on("window-all-closed", () => { /* stays in the tray */ });
 app.on("before-quit", () => { quitting = true; });

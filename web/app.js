@@ -575,8 +575,84 @@ async function pingsScreen() {
 
 // ---- Settings -----------------------------------------------------------------------------------
 
+/** Settings → Updates: the automatic-updates switch, and checking by hand. */
+function updatesCard(u) {
+  const line = h("p", { class: "muted" });
+  const btns = h("div", { class: "btns" });
+  const show = (s) => {
+    line.textContent = s.busy === "installing" ? `Installing Cellowalla ${s.latest}… The box restarts in a minute or two.`
+      : s.error ? `Couldn't check for updates: ${s.error}`
+      : s.available ? `Cellowalla ${s.latest} is ready to install (this box has ${s.current}).`
+      : s.checkedAt ? `Cellowalla ${s.current} is the newest version (checked ${ago(s.checkedAt)}).`
+      : `This box has Cellowalla ${s.current}.`;
+    btns.replaceChildren(
+      h("button", { class: "btn", disabled: !!s.busy, onclick: () => act(async () => show(await api("POST", "/api/updates/check"))) }, "Check now"),
+      s.available && !s.busy ? h("button", { class: "btn primary", onclick: () => act(async () => show(await api("POST", "/api/updates/check", { install: true }))) }, `Update to ${s.latest}`) : null);
+  };
+  show(u);
+  return h("div", { class: "card" }, h("h2", {}, "Box updates"),
+    h("div", { class: "row" }, h("div", { class: "grow" }, h("div", {}, "Update the box automatically"),
+      h("div", { class: "sub" }, "Once a day the box looks for a new version and puts it in by itself. Only versions signed by Cellowalla's owner are ever installed.")),
+    toggle(u.auto, (v) => api("PUT", "/api/updates", { auto: v }), "Update the box automatically")),
+    line, btns);
+}
+
+/** Settings → "This app": the Cellowalla app's own updates, when the dashboard is open in it. */
+function appUpdatesCard() {
+  const phone = window.CellowallaApp?.updates ? window.CellowallaApp : null;
+  const pc = window.cellowallaDesktop?.updates ? window.cellowallaDesktop : null;
+  if (!phone && !pc) return null;
+  const line = h("p", { class: "muted" });
+  const btns = h("div", { class: "btns" });
+  const sw = h("div");
+  const show = (s) => {
+    line.textContent = s.ready ? `Version ${s.ready} is ready to go in.`
+      : s.error ? `Couldn't check for updates: ${s.error}`
+      : s.last || (s.latest && s.latest !== s.current ? `Cellowalla ${s.latest} is out.` : `This app is Cellowalla ${s.current}.`);
+    sw.replaceChildren(toggle(s.auto, async (v) => show(phone ? JSON.parse(phone.setAutoUpdate(v)) : await pc.setAutoUpdate(v)), "Update this app automatically"));
+    btns.replaceChildren(
+      h("button", { class: "btn", onclick: async () => { line.textContent = "Checking…"; if (phone) phone.checkUpdates(); else show(await pc.checkUpdates()); } }, "Check now"),
+      s.ready && pc ? h("button", { class: "btn primary", onclick: () => pc.installUpdate() }, "Restart to update") : null);
+  };
+  window.cwAppUpdates = (json) => { if (line.isConnected) show(JSON.parse(json)); };
+  const card = h("div", { class: "card" }, h("h2", {}, "This app"),
+    h("div", { class: "row" }, h("div", { class: "grow" }, h("div", {}, "Update this app automatically"),
+      h("div", { class: "sub" }, "The Cellowalla app on this " + (phone ? "phone" : "computer") + " puts in new versions by itself. Only versions signed by Cellowalla's owner are installed.")), sw),
+    line, btns);
+  Promise.resolve(phone ? JSON.parse(phone.updates()) : pc.updates()).then(show).catch(() => {});
+  return card;
+}
+
+/** Settings → Backup: everything the box remembers, as a file to keep somewhere safe. */
+function backupCard() {
+  const pick = h("input", { type: "file", accept: ".json,application/json", hidden: true, onchange: () => {
+    const f = pick.files[0];
+    pick.value = "";
+    if (!f) return;
+    confirmSheet("Restore this backup?", "Everything on this box (devices, House Rules, Tunnel passes, Shield settings and the password) is replaced by what's in the file. You'll sign in again with the password from the backup.", "Restore", () => act(async () => {
+      let backup;
+      try { backup = JSON.parse(await f.text()); } catch { throw new Error("That isn't a Cellowalla backup file"); }
+      await api("POST", "/api/backup/restore", { backup });
+      showAuth(true);
+    }, "Restored"));
+  } });
+  const save = () => act(async () => {
+    const b = await api("GET", "/api/backup");
+    const name = `cellowalla-backup-${b.made.slice(0, 10)}.json`;
+    if (window.CellowallaApp?.saveFile) return window.CellowallaApp.saveFile(name, JSON.stringify(b, null, 1)); // (the Android app's WebView can't save downloads itself)
+    const url = URL.createObjectURL(new Blob([JSON.stringify(b, null, 1)], { type: "application/json" }));
+    h("a", { href: url, download: name }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    toast("Backup saved");
+  });
+  return h("div", { class: "card" }, h("h2", {}, "Backup"),
+    h("p", { class: "muted" }, "Save a copy of everything this box remembers. If the box's memory card ever fails, install Cellowalla on a new card and restore this file."),
+    h("div", { class: "note warn" }, "The file holds your Tunnel keys and the password's fingerprint. Keep it private, like a house key."),
+    h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: save }, "Download backup"), h("button", { class: "btn", onclick: () => pick.click() }, "Restore from a file…"), pick));
+}
+
 async function settingsScreen() {
-  const s = await api("GET", "/api/settings");
+  const [s, u] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/updates")]);
   const cur = h("input", { type: "password", autocomplete: "current-password" }), pw = h("input", { type: "password", autocomplete: "new-password" });
   const homeDns = h("input", { type: "text", value: s.net.homeDns || "", placeholder: "e.g. 192.168.1.1" });
   return h("div", {},
@@ -589,6 +665,9 @@ async function settingsScreen() {
     s.mode === "lookout" ? h("div", { class: "card" }, h("h2", {}, "Home names"),
       h("p", { class: "muted" }, "If your router gives devices names like printer.lan, enter its address so those names keep working."),
       h("div", { class: "inline" }, homeDns, h("button", { class: "btn", onclick: () => act(() => api("PUT", "/api/settings", { homeDns: homeDns.value }), "Saved") }, "Save"))) : null,
+    updatesCard(u),
+    appUpdatesCard(),
+    backupCard(),
     h("div", { class: "card" }, h("h2", {}, "Appearance"),
       h("p", { class: "muted" }, "Auto follows this device's own light or dark setting."), themeChips()),
     h("div", { class: "card" }, h("h2", {}, "Password"),

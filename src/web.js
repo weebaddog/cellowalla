@@ -11,7 +11,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { CATALOG, cleanName } from "./lists.js";
 import { rulesFor } from "./policy.js";
-import { newId } from "./state.js";
+import { newId, DEFAULTS, merge } from "./state.js";
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json", ".png": "image/png" };
 const SESSION_DAYS = 30;
@@ -240,6 +240,39 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       store.change("net", (s) => { if (typeof b.homeDns === "string") { if (b.homeDns && !/^\d+\.\d+\.\d+\.\d+$/.test(b.homeDns)) throw fail(400, "An IPv4 address"); s.net.homeDns = b.homeDns; } });
       return { mode: store.data.mode, net: store.data.net };
     },
+    // Updates (signed by the owner; see update.js)
+    "GET /api/updates": () => app.updater.status(),
+    "PUT /api/updates": (b) => app.updater.setAuto(b.auto),
+    "POST /api/updates/check": (b) => app.updater.check({ install: !!b.install }),
+
+    // Backup: everything the box remembers, as one file the owner keeps. Restoring it on a new box
+    // (after a dead SD card) brings back devices, House Rules, Tunnel passes and the password; the
+    // new box keeps its own mode and network ports, which its installer set up.
+    "GET /api/backup": () => ({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: store.data }),
+    "POST /api/backup/restore": async (b) => {
+      const st = b.backup?.state;
+      if (b.backup?.kind !== "cellowalla-backup" || !st || typeof st !== "object" || Array.isArray(st)) throw fail(400, "That isn't a Cellowalla backup file");
+      const base = DEFAULTS();
+      for (const [k, v] of Object.entries(base)) {
+        if (!(k in st) || st[k] === null) continue;
+        const want = Array.isArray(v) ? "array" : typeof v;
+        const got = Array.isArray(st[k]) ? "array" : typeof st[k];
+        if (v !== null && want !== got) throw fail(400, `That backup file is damaged (${k})`);
+      }
+      if (!st.admin?.salt || !st.admin?.hash) throw fail(400, "That backup has no password in it");
+      const next = merge(base, st);
+      const here = { mode: store.data.mode, net: { ...store.data.net, homeDns: typeof next.net.homeDns === "string" ? next.net.homeDns : "" } };
+      store.change("restore", (s) => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, next, here, { traffic: {} }); });
+      store.flush();
+      sessions.clear(); // sign in again, with the backup's password
+      app.roster.rebuild();
+      await app.tunnel.apply().catch((e) => log(`[restore] tunnel: ${e.message}`));
+      await app.gate.apply(true).catch((e) => log(`[restore] gate: ${e.message}`));
+      app.refreshLists().catch(() => {});
+      app.pings.send("system", "Settings were restored from a backup.");
+      return { ok: true };
+    },
+
     "POST /api/password": (b) => {
       if (!checkPassword(b.current, store.data.admin)) throw fail(403, "The current password is wrong");
       if (String(b.password || "").length < 10) throw fail(400, "Use at least 10 characters");
@@ -249,9 +282,9 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
     },
   };
 
-  async function readJson(req) {
+  async function readJson(req, max = 65536) {
     const chunks = []; let n = 0;
-    for await (const c of req) { n += c.length; if (n > 65536) throw fail(413, "Too big"); chunks.push(c); }
+    for await (const c of req) { n += c.length; if (n > max) throw fail(413, "Too big"); chunks.push(c); }
     if (!n) return {};
     try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw fail(400, "Bad JSON"); }
   }
@@ -313,7 +346,7 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
       if (!signedIn(req)) throw fail(401, "Sign in");
       const route = routes[`${req.method} ${url.pathname}`];
       if (!route) throw fail(404, "No such thing");
-      const body = req.method === "GET" ? {} : await readJson(req);
+      const body = req.method === "GET" ? {} : await readJson(req, url.pathname === "/api/backup/restore" ? 16 << 20 : 65536);
       return send(res, 200, await route(body, url));
     } catch (e) {
       if (!e.status) log(`[web] ${req.method} ${url.pathname}: ${e.stack || e.message}`);

@@ -1,6 +1,6 @@
 {
   "name": "cellowalla",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cellowalla: a home network guard for a small Linux box (DNS Shield, Roster, House Rules, Tunnel, Pings).",
   "type": "module",
   "private": true,

@@ -330,6 +330,55 @@ await test("bad input is refused politely", async () => {
   assert.equal((await call("PUT", "/api/devices", { mac: "nope" })).status, 404);
   assert.equal((await call("PUT", "/api/pings/settings", { ntfy: "javascript:alert(1)" })).status, 400);
 });
+await test("backup: download, change things, restore brings them back (and asks to sign in again)", async () => {
+  const b = (await call("GET", "/api/backup")).body;
+  assert.equal(b.kind, "cellowalla-backup");
+  assert.equal(b.state.devices[MAC].name, "Sam's tablet");
+  await call("PUT", "/api/devices", { mac: MAC, name: "Renamed" });
+  assert.equal(app.store.data.devices[MAC].name, "Renamed");
+  assert.equal((await call("POST", "/api/backup/restore", { backup: { kind: "nope" } })).status, 400);
+  assert.equal((await call("POST", "/api/backup/restore", { backup: { ...b, state: { ...b.state, devices: "x" } } })).status, 400);
+  const mode = app.store.data.mode;
+  const r = await call("POST", "/api/backup/restore", { backup: { ...b, state: { ...b.state, mode: "gatekeeper" } } });
+  assert.equal(r.status, 200);
+  assert.equal(app.store.data.devices[MAC].name, "Sam's tablet");
+  assert.equal(app.store.data.mode, mode, "the box keeps its own mode");
+  assert.equal((await call("GET", "/api/devices")).status, 401, "signed out after a restore");
+  assert.equal((await call("POST", "/api/login", { password: "a long password" })).status, 200);
+});
+
+await test("updates: only a version signed with the release key, and only a matching download", async () => {
+  const { createUpdater, signedRelease, newer } = await import("../src/update.js");
+  const crypto = await import("node:crypto");
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const tarball = Buffer.from("pretend this is cellowalla.tar.gz");
+  const sha = crypto.createHash("sha256").update(tarball).digest("hex");
+  const sign = (apps, k = privateKey) => { const payload = JSON.stringify({ v: 1, apps }); return JSON.stringify({ payload, sig: crypto.sign("sha256", Buffer.from(payload), { key: k, dsaEncoding: "ieee-p1363" }).toString("base64") }); };
+  const entry = { version: "99.0.0", path: "/download/Cellowalla-Box.tar.gz", size: tarball.length, sha256: sha };
+  assert.equal(signedRelease(sign({ cellowallaBox: entry }), "cellowallaBox", key).version, "99.0.0");
+  assert.throws(() => signedRelease(sign({ cellowallaBox: entry }, crypto.generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey), "cellowallaBox", key), /isn't signed/);
+  assert.equal(signedRelease(sign({ cellowallaBox: { ...entry, path: "https://evil/x" } }), "cellowallaBox", key), null);
+  assert.ok(newer("1.10.0", "1.9.3") && !newer("1.0.0", "1.0.0") && !newer("0.9.9", "1.0.0"));
+
+  let list = sign({ cellowallaBox: entry }), body = tarball;
+  const fetchUpd = async (url) => new URL(url).pathname === "/release.json" ? new Response(list) : new Response(body);
+  const ran = [];
+  const sys = { dry: true, run: async (cmd, args) => { ran.push([cmd, ...args].join(" ")); return ""; } };
+  const up = createUpdater({ store: app.store, version: "0.1.0", dataDir: dir, sys, fetchImpl: fetchUpd, log: () => {}, site: "https://updates.test", key });
+  let s = await up.check();
+  assert.ok(s.available && s.latest === "99.0.0" && ran.length === 0, "checking doesn't install");
+  body = Buffer.from("tampered!");
+  s = await up.check({ install: true });
+  assert.match(s.error, /doesn't match/);
+  assert.equal(ran.length, 0, "a tampered download is never run");
+  body = tarball;
+  s = await up.check({ install: true });
+  assert.ok(ran.some((c) => c.startsWith("tar -xzf")) && ran.some((c) => c.startsWith("systemd-run") && c.includes("CW_YES=1") && c.endsWith("install.sh")), ran.join("\n"));
+  assert.equal((await call("PUT", "/api/updates", { auto: false })).body.auto, false);
+  assert.equal(app.store.data.updates.auto, false);
+});
+
 await test("status adds it all up; state survives a restart", async () => {
   const s = (await call("GET", "/api/status")).body;
   assert.ok(s.shield.lookups > 10 && s.shield.blocked > 5 && s.devices.total >= 2);

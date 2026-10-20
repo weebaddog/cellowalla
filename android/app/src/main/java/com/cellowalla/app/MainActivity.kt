@@ -67,15 +67,18 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         PingsWorker.schedule(this)
+        SelfUpdate.schedule(this)
     }
 
     override fun onResume() {
         super.onResume()
+        SelfUpdate.inForeground = true
         if (box.url.isNotEmpty()) Thread { runCatching { PingsWorker.check(applicationContext, box) } }.start()
     }
 
     override fun onPause() {
         super.onPause()
+        SelfUpdate.inForeground = false
         CookieManager.getInstance().flush()
     }
 
@@ -237,6 +240,17 @@ class MainActivity : Activity() {
         w.settings.allowContentAccess = false
         CookieManager.getInstance().setAcceptCookie(true)
         w.addJavascriptInterface(Bridge(), "CellowallaApp")
+        // "Restore from a file…" in Settings: the phone's file picker.
+        w.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onShowFileChooser(view: WebView, callback: android.webkit.ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+                pendingPick?.onReceiveValue(null)
+                pendingPick = callback
+                return try {
+                    @Suppress("DEPRECATION") startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_PICK)
+                    true
+                } catch (e: Exception) { pendingPick = null; false }
+            }
+        }
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
@@ -293,6 +307,24 @@ class MainActivity : Activity() {
             runOnUiThread { startActivity(Intent.createChooser(send, "Add the Tunnel pass to WireGuard")) }
         }
 
+        @JavascriptInterface fun updates(): String = updatesJson()
+        @JavascriptInterface fun setAutoUpdate(on: Boolean): String { SelfUpdate.setOn(this@MainActivity, on); return updatesJson() }
+        /** Checks (and installs a newer signed version); the answer goes to window.cwAppUpdates. */
+        @JavascriptInterface fun checkUpdates() {
+            runOnUiThread { this@MainActivity.checkUpdates { web?.evaluateJavascript("window.cwAppUpdates && window.cwAppUpdates(${org.json.JSONObject.quote(updatesJson())})", null) } }
+        }
+
+        /** Saves a file the dashboard made (the box's backup) wherever the person picks. */
+        @JavascriptInterface
+        fun saveFile(name: String, text: String) {
+            runOnUiThread {
+                pendingSave = text
+                @Suppress("DEPRECATION")
+                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("application/json").putExtra(Intent.EXTRA_TITLE, name), REQ_SAVE)
+            }
+        }
+
         /** The dashboard's own theme switch was used: the app's screens follow. */
         @JavascriptInterface
         fun themeChanged(mode: String) { runOnUiThread { applyTheme(mode, fromPage = true) } }
@@ -337,9 +369,24 @@ class MainActivity : Activity() {
         menu.add(0, 2, 0, "Pause Shield 15 min")
         menu.add(0, 3, 0, "Resume Shield")
         menu.add(0, 5, 0, "Appearance (light / dark)")
+        menu.add(0, 6, 0, "Update automatically").isCheckable = true
+        menu.add(0, 7, 0, "Check for updates")
         menu.add(0, 4, 0, "Change box")
         return true
     }
+
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        menu.findItem(6)?.isChecked = SelfUpdate.isOn(this)
+        return true
+    }
+
+    private fun checkUpdates(then: (String) -> Unit) {
+        Thread { val msg = SelfUpdate.run(applicationContext); runOnUiThread { if (!gone) then(msg) } }.start()
+    }
+
+    /** This app's updates, for the dashboard's Settings → Updates card. */
+    private fun updatesJson(): String = org.json.JSONObject()
+        .put("auto", SelfUpdate.isOn(this)).put("current", SelfUpdate.versionName(this)).put("last", SelfUpdate.lastResult).toString()
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
@@ -348,6 +395,8 @@ class MainActivity : Activity() {
             3 -> pause(0)
             4 -> { box.url = ""; box.pin = ""; showSetup(null) }
             5 -> chooseTheme()
+            6 -> { SelfUpdate.setOn(this, !item.isChecked); item.isChecked = !item.isChecked; toast(if (item.isChecked) "Automatic updates on" else "Automatic updates off") }
+            7 -> { toast("Checking for updates…"); checkUpdates { toast(it) } }
         }
         return true
     }
@@ -362,6 +411,29 @@ class MainActivity : Activity() {
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+
+    // ---- files for Settings → Backup ------------------------------------------------------------------
+
+    private var pendingSave: String? = null
+    private var pendingPick: android.webkit.ValueCallback<Array<Uri>>? = null
+
+    @Deprecated("Plain Activity: no Activity Result API without AndroidX")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION") super.onActivityResult(requestCode, resultCode, data)
+        val uri = if (resultCode == RESULT_OK) data?.data else null
+        when (requestCode) {
+            REQ_SAVE -> {
+                val text = pendingSave; pendingSave = null
+                if (uri != null && text != null) {
+                    val ok = runCatching { contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) } }.isSuccess
+                    toast(if (ok) "Backup saved" else "Couldn't save the backup")
+                }
+            }
+            REQ_PICK -> { pendingPick?.onReceiveValue(uri?.let { arrayOf(it) }); pendingPick = null }
+        }
+    }
+
+    private companion object { const val REQ_SAVE = 41; const val REQ_PICK = 42 }
 
     // Back goes back in the dashboard first. Android 13+ (and every back gesture on Android 16) uses
     // the back dispatcher: the callback is only registered while the dashboard has somewhere to go back to.

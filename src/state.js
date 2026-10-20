@@ -48,10 +48,11 @@ export const DEFAULTS = () => ({
     events: { newDevice: true, tunnel: true, malware: true, bedtime: false, system: true },
   },
   traffic: {},                    // ip → { up, down } bytes counted so far (gatekeeper)
+  updates: { auto: true },        // put in new versions (signed by the owner) by itself
 });
 
 /** Fills in anything a newer version added, keeping what's there. */
-function merge(base, saved) {
+export function merge(base, saved) {
   if (Array.isArray(base) || typeof base !== "object" || base === null) return saved === undefined ? base : saved;
   const out = { ...base };
   for (const [k, v] of Object.entries(saved || {})) {

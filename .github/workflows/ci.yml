@@ -60,6 +60,10 @@ jobs:
           IF=$(ip route show default | awk '{print $5; exit}')
           sudo CW_YES=1 CW_MODE=lookout CW_LAN="$IF" CW_TZ=UTC bash install/install.sh
           sleep 3; systemctl is-active cellowalla
+      - name: The box updates itself (download, check, run the installer, come back)
+        run: |
+          sudo node .github/check-update.mjs
+          grep -q '"version": "9.9.9"' /opt/cellowalla/package.json
       - name: Uninstall
         run: |
           sudo bash install/uninstall.sh

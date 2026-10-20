@@ -1,7 +1,7 @@
 {
   "name": "cellowalla-desktop",
   "productName": "Cellowalla",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Cellowalla for Windows and Linux: your box's dashboard, tray and notifications",
   "author": "Cellowalla <90303180+weebaddog@users.noreply.github.com>",
   "homepage": "https://github.com/weebaddog/cellowalla",
@@ -10,7 +10,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win nsis",
+    "dist:win": "electron-builder --win nsis && node ../tools/note-build.mjs dist/Cellowalla-Setup.exe",
     "dist:linux": "electron-builder --linux AppImage deb"
   },
   "devDependencies": {
@@ -23,6 +23,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "updates.js",
       "setup.html",
       "setup.js",
       "setup.css",
