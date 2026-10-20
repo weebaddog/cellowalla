@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand">#0F7A5A</color>
+    <color name="brand_dark">#0B5C44</color>
+    <style name="Theme.Cellowalla" parent="android:Theme.Material.Light.DarkActionBar">
+        <item name="android:colorPrimary">@color/brand</item>
+        <item name="android:colorPrimaryDark">@color/brand_dark</item>
+        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:statusBarColor">@color/brand_dark</item>
+    </style>
+</resources>

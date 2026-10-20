@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The box lives at home and may be reached by its bare address. Its own certificate is checked by
+     the app itself (pinned on first use), not by this file. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

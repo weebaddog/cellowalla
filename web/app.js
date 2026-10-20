@@ -516,7 +516,9 @@ function passSheet(name, conf) {
     const file = URL.createObjectURL(new Blob([conf], { type: "text/plain" }));
     b.append(h("p", {}, "On the phone: install the WireGuard app, tap +, choose ", h("b", {}, "Scan from QR code"), " and point it here."),
       qrBox,
-      h("div", { class: "btns" }, h("a", { class: "btn", href: file, download: `${name.replace(/[^A-Za-z0-9 _-]/g, "").trim() || "cellowalla"}.conf` }, "Download file (for laptops)")),
+      window.CellowallaApp
+        ? h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: () => window.CellowallaApp.shareConf(name, conf) }, "Add to WireGuard on this phone"))
+        : h("div", { class: "btns" }, h("a", { class: "btn", href: file, download: `${name.replace(/[^A-Za-z0-9 _-]/g, "").trim() || "cellowalla"}.conf` }, "Download file (for laptops)")),
       h("div", { class: "note warn" }, "This code is a key to your home network. Don't post or share screenshots of it."),
       h("details", {}, h("summary", {}, "Show the settings as text"), h("pre", {}, conf)));
   });
