@@ -25,9 +25,12 @@ android {
         if (keystoreProps.isNotEmpty()) {
             create("release") {
                 storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
+                // The password lives in the secrets vault (DPAPI): load it first (. secrets\vault.ps1; Import-VaultSecrets).
+                val pass = keystoreProps.getProperty("storePassword") ?: System.getenv("CELLOWALLA_KEYSTORE_PASSWORD")
+                    ?: throw GradleException("Release signing needs the keystore password: run . C:\\MyReverseProjects\\secrets\\vault.ps1; Import-VaultSecrets first")
+                storePassword = pass
                 keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+                keyPassword = keystoreProps.getProperty("keyPassword") ?: pass
             }
         }
     }

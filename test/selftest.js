@@ -331,9 +331,21 @@ await test("bad input is refused politely", async () => {
   assert.equal((await call("PUT", "/api/pings/settings", { ntfy: "javascript:alert(1)" })).status, 400);
 });
 await test("backup: download, change things, restore brings them back (and asks to sign in again)", async () => {
-  const b = (await call("GET", "/api/backup")).body;
+  assert.equal((await call("POST", "/api/backup", { passphrase: "short" })).status, 400);
+  const sealed = (await call("POST", "/api/backup", { passphrase: "backup pass 1" })).body;
+  assert.equal(sealed.kind, "cellowalla-backup-encrypted");
+  assert.equal(JSON.stringify(sealed).includes("Sam's tablet"), false, "nothing readable in the file");
+  assert.equal(JSON.stringify(sealed).includes(app.store.data.tunnel.privateKey || "Sam's tablet"), false, "no Tunnel key in the file");
+  assert.equal((await call("POST", "/api/backup/restore", { backup: sealed, passphrase: "wrong one" })).status, 403);
+  assert.equal((await call("POST", "/api/backup/restore", { backup: sealed })).status, 400);
+  const { openBackup } = await import("../src/web.js");
+  const b = JSON.parse(openBackup(sealed, "backup pass 1"));
   assert.equal(b.kind, "cellowalla-backup");
   assert.equal(b.state.devices[MAC].name, "Sam's tablet");
+  await call("PUT", "/api/devices", { mac: MAC, name: "Renamed" });
+  assert.equal((await call("POST", "/api/backup/restore", { backup: sealed, passphrase: "backup pass 1" })).status, 200, "the encrypted file restores");
+  assert.equal(app.store.data.devices[MAC].name, "Sam's tablet");
+  assert.equal((await call("POST", "/api/login", { password: "a long password" })).status, 200);
   await call("PUT", "/api/devices", { mac: MAC, name: "Renamed" });
   assert.equal(app.store.data.devices[MAC].name, "Renamed");
   assert.equal((await call("POST", "/api/backup/restore", { backup: { kind: "nope" } })).status, 400);
@@ -395,7 +407,8 @@ await test("problem reports: from any app, repeats counted, people's own emailed
   assert.match(sent[0].text, /Someone reported a problem in dashboard/); assert.match(sent[0].text, /NullPointerException \(2 times\)|crash in android \(2 times\)/);
   r = (await call("GET", "/api/reports")).body;
   assert.ok(r.reports.every((x) => x.sent)); assert.equal(JSON.stringify(r).includes("abcdefghijklmnop"), false);
-  const backup = (await call("GET", "/api/backup")).body;
+  const { openBackup: openB } = await import("../src/web.js");
+  const backup = JSON.parse(openB((await call("POST", "/api/backup", { passphrase: "backup pass 2" })).body, "backup pass 2"));
   assert.equal(JSON.stringify(backup).includes("abcdefghijklmnop"), false, "the App Password never goes into a backup");
 });
 await test("status adds it all up; state survives a restart", async () => {

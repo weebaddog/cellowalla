@@ -629,25 +629,42 @@ function backupCard() {
     const f = pick.files[0];
     pick.value = "";
     if (!f) return;
-    confirmSheet("Restore this backup?", "Everything on this box (devices, House Rules, Tunnel passes, Shield settings and the password) is replaced by what's in the file. You'll sign in again with the password from the backup.", "Restore", () => act(async () => {
-      let backup;
-      try { backup = JSON.parse(await f.text()); } catch { throw new Error("That isn't a Cellowalla backup file"); }
-      await api("POST", "/api/backup/restore", { backup });
+    const restore = (backup, passphrase) => confirmSheet("Restore this backup?", "Everything on this box (devices, House Rules, Tunnel passes, Shield settings and the password) is replaced by what's in the file. You'll sign in again with the password from the backup.", "Restore", () => act(async () => {
+      await api("POST", "/api/backup/restore", { backup, passphrase });
       showAuth(true);
     }, "Restored"));
+    f.text().then((t) => {
+      let backup;
+      try { backup = JSON.parse(t); } catch { toast("That isn't a Cellowalla backup file", true); return; }
+      if (backup.kind !== "cellowalla-backup-encrypted") return restore(backup, null); // (older, unprotected backups)
+      sheet("Backup password", (b, close) => {
+        const pw = h("input", { type: "password", autocomplete: "off" });
+        b.append(h("p", { class: "muted" }, "Type the backup password you picked when you saved this file."), h("label", { class: "field" }, h("span", {}, "Backup password"), pw),
+          h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: () => { close(); restore(backup, pw.value); } }, "Next")));
+        pw.focus();
+      });
+    });
   } });
-  const save = () => act(async () => {
-    const b = await api("GET", "/api/backup");
-    const name = `cellowalla-backup-${b.made.slice(0, 10)}.json`;
-    if (window.CellowallaApp?.saveFile) return window.CellowallaApp.saveFile(name, JSON.stringify(b, null, 1)); // (the Android app's WebView can't save downloads itself)
-    const url = URL.createObjectURL(new Blob([JSON.stringify(b, null, 1)], { type: "application/json" }));
-    h("a", { href: url, download: name }).click();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    toast("Backup saved");
+  const save = () => sheet("Protect the backup", (b, close) => {
+    const pw = h("input", { type: "password", autocomplete: "new-password" }), pw2 = h("input", { type: "password", autocomplete: "new-password" });
+    b.append(h("p", { class: "muted" }, "The backup holds your Tunnel keys, so it's locked with a password of your choice. You'll need it to restore: keep it somewhere safe (it can't be recovered)."),
+      h("label", { class: "field" }, h("span", {}, "Backup password (8+ characters)"), pw), h("label", { class: "field" }, h("span", {}, "Same again"), pw2),
+      h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: () => act(async () => {
+        if (pw.value !== pw2.value) throw new Error("The two passwords don't match");
+        const bk = await api("POST", "/api/backup", { passphrase: pw.value });
+        close();
+        const name = `cellowalla-backup-${bk.made.slice(0, 10)}.json`;
+        if (window.CellowallaApp?.saveFile) return window.CellowallaApp.saveFile(name, JSON.stringify(bk, null, 1)); // (the Android app's WebView can't save downloads itself)
+        const url = URL.createObjectURL(new Blob([JSON.stringify(bk, null, 1)], { type: "application/json" }));
+        h("a", { href: url, download: name }).click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        toast("Backup saved (encrypted)");
+      }) }, "Save backup")));
+    pw.focus();
   });
   return h("div", { class: "card" }, h("h2", {}, "Backup"),
     h("p", { class: "muted" }, "Save a copy of everything this box remembers. If the box's memory card ever fails, install Cellowalla on a new card and restore this file."),
-    h("div", { class: "note warn" }, "The file holds your Tunnel keys and the password's fingerprint. Keep it private, like a house key."),
+    h("div", { class: "note" }, "The file is encrypted with a backup password you pick, because it holds your Tunnel keys."),
     h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: save }, "Download backup"), h("button", { class: "btn", onclick: () => pick.click() }, "Restore from a file…"), pick));
 }
 

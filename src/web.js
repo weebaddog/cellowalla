@@ -27,6 +27,24 @@ function checkPassword(pw, admin) {
   return crypto.timingSafeEqual(h, Buffer.from(admin.hash, "hex"));
 }
 
+/** A backup file, encrypted with a password (scrypt, then AES-256-GCM). */
+export function sealBackup(text, passphrase, version) {
+  const salt = crypto.randomBytes(16), iv = crypto.randomBytes(12);
+  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 15, r: 8, p: 1, maxmem: 64 << 20 });
+  const c = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const data = Buffer.concat([c.update(text, "utf8"), c.final()]);
+  return { kind: "cellowalla-backup-encrypted", v: 2, version, made: new Date().toISOString(), kdf: { name: "scrypt", N: 1 << 15, r: 8, p: 1, salt: salt.toString("base64") },
+    iv: iv.toString("base64"), tag: c.getAuthTag().toString("base64"), data: data.toString("base64") };
+}
+export function openBackup(b, passphrase) {
+  const k = b.kdf || {};
+  if (k.name !== "scrypt" || !(k.N <= 1 << 20)) throw new Error("unknown backup format");
+  const key = crypto.scryptSync(passphrase, Buffer.from(k.salt, "base64"), 32, { N: k.N, r: k.r, p: k.p, maxmem: 256 << 20 });
+  const d = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(b.iv, "base64"));
+  d.setAuthTag(Buffer.from(b.tag, "base64"));
+  return Buffer.concat([d.update(Buffer.from(b.data, "base64")), d.final()]).toString("utf8");
+}
+
 export function createWeb({ store, app, webDir, setupCode, log = console.log }) {
   const sessions = new Map();     // token hash → expiry
   const failures = new Map();     // ip → [times]
@@ -254,8 +272,18 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
     // Backup: everything the box remembers, as one file the owner keeps. Restoring it on a new box
     // (after a dead SD card) brings back devices, House Rules, Tunnel passes and the password; the
     // new box keeps its own mode and network ports, which its installer set up.
-    "GET /api/backup": () => ({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: { ...store.data, reportsMail: { ...store.data.reportsMail, pass: undefined } } }), // (never the mail App Password)
+    // The backup holds the Tunnel keys, so it's only ever handed out encrypted with a backup password
+    // the owner picks (scrypt → AES-256-GCM). Never the mail App Password.
+    "POST /api/backup": (b) => {
+      if (String(b.passphrase || "").length < 8) throw fail(400, "Pick a backup password of at least 8 characters");
+      const plain = JSON.stringify({ kind: "cellowalla-backup", v: 1, version: app.version, made: new Date().toISOString(), state: { ...store.data, reportsMail: { ...store.data.reportsMail, pass: undefined } } });
+      return sealBackup(plain, String(b.passphrase), app.version);
+    },
     "POST /api/backup/restore": async (b) => {
+      if (b.backup?.kind === "cellowalla-backup-encrypted") {
+        if (!b.passphrase) throw fail(400, "This backup is protected: type its backup password");
+        try { b.backup = JSON.parse(openBackup(b.backup, String(b.passphrase))); } catch { throw fail(403, "That backup password is wrong (or the file is damaged)"); }
+      }
       const st = b.backup?.state;
       if (b.backup?.kind !== "cellowalla-backup" || !st || typeof st !== "object" || Array.isArray(st)) throw fail(400, "That isn't a Cellowalla backup file");
       const base = DEFAULTS();
