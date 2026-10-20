@@ -1,0 +1,84 @@
+HOW TO INSTALL CELLOWALLA
+=========================
+
+Cellowalla runs on its own small Linux computer (the "box") that stays plugged into your
+router. It doesn't install on Windows or a phone: the Cellowalla apps only control the box.
+It takes about 20 minutes. The full guide, with drawings, is web/guide.html in this folder.
+
+
+WHAT YOU NEED
+-------------
+- A Raspberry Pi 4 or 5 (2 GB of memory or more), or any old mini PC.
+- Debian 12 or newer, Raspberry Pi OS (Bookworm or newer) or Ubuntu 22.04 or newer on it.
+- A network cable from the box to your router.
+
+
+1. GET THE BOX READY
+--------------------
+For a Raspberry Pi: on your computer, use Raspberry Pi Imager to put
+"Raspberry Pi OS Lite" on the SD card. In the Imager's settings, turn on SSH and choose a
+username and password. Put the card in the Pi.
+
+Plug the box into your router with the cable and switch it on.
+
+
+2. COPY THIS SOFTWARE ONTO THE BOX
+----------------------------------
+In PowerShell (Windows) or Terminal (Mac), in the folder where the zip file is
+(use the username you chose instead of "pi"):
+
+    scp Cellowalla-Box-Software.zip pi@raspberrypi.local:
+
+(A USB stick works too.)
+
+
+3. RUN THE INSTALLER ON THE BOX
+-------------------------------
+Log in to the box: type   ssh pi@raspberrypi.local   or use a keyboard and screen on it.
+Then type:
+
+    sudo apt install -y unzip
+    unzip Cellowalla-Box-Software.zip
+    cd cellowalla
+    sudo bash install/install.sh
+
+It asks a few questions:
+- Mode: press Enter for "lookout" (the easy one: the box sits next to your router).
+- Port connected to your router: press Enter for the suggested one.
+- Time zone: press Enter if it's right.
+
+At the end it shows the BOX'S ADDRESS and a SETUP CODE. Write the code down: you need it
+once, to choose your password.
+
+
+4. FINISH IN YOUR ROUTER'S SETTINGS
+-----------------------------------
+Open your router's settings page or app (often http://192.168.1.1).
+a) Reserve the box's address so it never changes. Look for "DHCP reservation",
+   "static lease" or "address reservation".
+b) Set the DNS server your router hands to devices to the box's address.
+   Leave the second DNS empty, or devices will sometimes skip Cellowalla.
+c) Turn Wi-Fi off and on again on your phone so it picks up the change.
+
+Some internet-provider routers don't let you change the DNS. Then use Gatekeeper mode
+(the box becomes your router): see "Finishing Gatekeeper setup" in web/guide.html.
+
+
+5. CONNECT THE APPS
+-------------------
+On your home Wi-Fi, open the Cellowalla app on your computer or phone, press
+"Find my box" (or type the address the installer showed), choose "Trust this box",
+then type the setup code and choose a password (10 characters or more).
+
+You can also use a web browser: open https://<the box's address>. The browser will warn
+the connection isn't private; that's expected (the box made its own certificate).
+Choose Advanced, then Continue.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- Forgot the password: on the box, run   sudo cellowalla-reset-password
+  It prints a new setup code.
+- To change mode or ports, or to upgrade: run the installer again (it's safe).
+- To remove Cellowalla: in the cellowalla folder on the box, run   sudo bash install/uninstall.sh
+  then set your router's DNS back to automatic.

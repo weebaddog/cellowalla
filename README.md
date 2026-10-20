@@ -9,7 +9,7 @@ A home network guard for a small Linux box (Raspberry Pi 4/5 or any mini PC runn
 - **Pings**: alerts in the dashboard and to your phone through ntfy or a webhook
 - Two setups: **Lookout** (DNS only, plugs into your router) or **Gatekeeper** (two ports, the box is the router)
 
-Install on the box: `sudo bash install/install.sh`. The full user guide is `web/guide.html`, and the dashboard opens it from the ? button.
+Install on the box: `sudo bash install/install.sh` (step by step: `HOW-TO-INSTALL.txt`). The full user guide is `web/guide.html`, and the dashboard opens it from the ? button.
 
 Development (any OS, nothing on the system changes):
 
