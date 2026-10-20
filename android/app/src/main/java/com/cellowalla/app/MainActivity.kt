@@ -48,10 +48,14 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         box = Box(this)
         root = FrameLayout(this)
+        // Android 15+ draws apps edge to edge: keep clear of the status bar, title bar, keyboard and gesture bar.
+        val tv = android.util.TypedValue()
+        val barHeight = if (theme.resolveAttribute(android.R.attr.actionBarSize, tv, true)) android.util.TypedValue.complexToDimensionPixelSize(tv.data, resources.displayMetrics) else 0
         root.setOnApplyWindowInsetsListener { v, insets ->
-            val bars = if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime()) else null
-            if (bars != null) v.setPadding(bars.left, 0, bars.right, bars.bottom)
-            else @Suppress("DEPRECATION") v.setPadding(insets.systemWindowInsetLeft, 0, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            if (Build.VERSION.SDK_INT >= 35) {
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+                v.setPadding(bars.left, bars.top + barHeight, bars.right, bars.bottom)
+            }
             insets
         }
         setContentView(root)
