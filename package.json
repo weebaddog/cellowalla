@@ -1,0 +1,13 @@
+{
+  "name": "cellowalla",
+  "version": "0.1.0",
+  "description": "Cellowalla: a home network guard for a small Linux box (DNS Shield, Roster, House Rules, Tunnel, Pings).",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node test/selftest.js"
+  }
+}

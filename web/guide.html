@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cellowalla User Guide</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="guide">
+<header class="top">
+  <div class="logo"><img src="icon.svg" alt="">Cellowalla User Guide</div>
+  <a class="btn small" href="/">Open dashboard</a>
+</header>
+<main>
+
+<p>Cellowalla is a small box that guards your home network. It blocks ads, trackers, malware and anything else you choose, for every device in the house at once. It shows you every device on your Wi-Fi, lets you set bedtimes and pause the internet for the kids, and lets your phone come home securely from anywhere through WireGuard.</p>
+
+<div class="card">
+<h3>In this guide</h3>
+<ul class="toc">
+  <li><a href="#words">The parts of Cellowalla</a></li>
+  <li><a href="#need">What you need</a></li>
+  <li><a href="#modes">Lookout or Gatekeeper?</a></li>
+  <li><a href="#install">Installing</a></li>
+  <li><a href="#lookout-setup">Finishing Lookout setup</a></li>
+  <li><a href="#gatekeeper-setup">Finishing Gatekeeper setup</a></li>
+  <li><a href="#first">First sign-in</a></li>
+  <li><a href="#home">Home screen</a></li>
+  <li><a href="#shield">Shield (blocking)</a></li>
+  <li><a href="#roster">Roster (devices)</a></li>
+  <li><a href="#lobby">The Lobby</a></li>
+  <li><a href="#rules">House Rules and Crews</a></li>
+  <li><a href="#tunnel">Tunnel (WireGuard)</a></li>
+  <li><a href="#pings">Pings (alerts)</a></li>
+  <li><a href="#howto">Everyday how-tos</a></li>
+  <li><a href="#trouble">When something's wrong</a></li>
+  <li><a href="#privacy">Privacy</a></li>
+  <li><a href="#remove">Removing Cellowalla</a></li>
+</ul>
+</div>
+
+<h2 id="words">The parts of Cellowalla</h2>
+<table>
+  <tr><th>Name</th><th>What it does</th></tr>
+  <tr><td><b>Shield</b></td><td>Answers every device's "where is this website?" question (DNS) and refuses the ones on your block lists: ads and trackers, malware and scams, adult, social media, gaming and gambling, plus your own lists.</td></tr>
+  <tr><td><b>Clean Search</b></td><td>Forces Google, Bing, DuckDuckGo, Brave Search and YouTube into their family-safe modes.</td></tr>
+  <tr><td><b>Roster</b></td><td>The list of every device on your network, with what it looked up and (in Gatekeeper mode) how much data it used.</td></tr>
+  <tr><td><b>Lobby</b></td><td>When it's on, new devices get no internet until you press <i>Let in</i>.</td></tr>
+  <tr><td><b>House Rules</b></td><td>Pause buttons, bedtimes and extra blocking for particular devices.</td></tr>
+  <tr><td><b>Crew</b></td><td>A group of devices that share House Rules, for example one child's phone, tablet and console.</td></tr>
+  <tr><td><b>Tunnel</b></td><td>A WireGuard server on the box. Phones and laptops connect to it from anywhere to reach home and stay protected by Shield.</td></tr>
+  <tr><td><b>Pass</b></td><td>One device's key for the Tunnel, shown as a QR code.</td></tr>
+  <tr><td><b>Pings</b></td><td>Alerts: a new device, a malware site stopped, a phone connecting through the Tunnel, bedtime starting. They can be sent to your phone.</td></tr>
+  <tr><td><b>Lookout / Gatekeeper</b></td><td>The two ways to connect the box. See below.</td></tr>
+</table>
+
+<h2 id="need">What you need</h2>
+<ul>
+  <li>A small Linux computer running Debian 12 (or newer), Raspberry Pi OS (Bookworm or newer) or Ubuntu 22.04 (or newer). A Raspberry Pi 4 or 5 with 2 GB of memory or more works well; so does any old mini PC.</li>
+  <li>For <b>Gatekeeper</b> mode: two network ports. A Raspberry Pi has one, so add a USB 3 gigabit Ethernet adapter (about $15).</li>
+  <li>A network cable to your router (Lookout) or between the modem and your Wi-Fi router (Gatekeeper).</li>
+  <li>About 20 minutes.</li>
+</ul>
+
+<h2 id="modes">Lookout or Gatekeeper?</h2>
+<div class="grid">
+  <div class="card"><h2>Lookout</h2>
+    <pre>Modem ─ Your router ─┬─ phones, laptops…
+                     └─ Cellowalla</pre>
+    <p>The box plugs into your router like any other device. Your router tells every device to use the box for DNS.</p>
+    <p><b>Good:</b> 5-minute setup, nothing in the way if the box is off for a moment (you can set your router's second DNS to a public one).</p>
+    <p><b>Limits:</b> blocking and House Rules work through DNS only. A clever device that's hard-coded to use other DNS, or a VPN app, can slip past. No data counts per device.</p>
+  </div>
+  <div class="card"><h2>Gatekeeper</h2>
+    <pre>Modem ─ Cellowalla ─ Your Wi-Fi ─ phones…
+         (internet)  (home)</pre>
+    <p>The box sits between the modem and your Wi-Fi router (or Wi-Fi access points) and becomes the router for the whole house.</p>
+    <p><b>Good:</b> pauses, bedtimes, blocks and the Lobby really cut the device off; devices can't dodge Shield; data use is counted per device.</p>
+    <p><b>Limits:</b> needs two network ports, and your Wi-Fi router must be switched to "access point" (or "bridge") mode. If the box is off, the house has no internet.</p>
+  </div>
+</div>
+<p>Not sure? Start with <b>Lookout</b>. You can switch to Gatekeeper later by running the installer again.</p>
+
+<h2 id="install">Installing</h2>
+<ol>
+  <li>Put Debian or Raspberry Pi OS (Lite is fine) on the box, connect it to your network with a cable, and make sure you can log in to it (keyboard and screen, or <code>ssh</code>).</li>
+  <li>Copy the <code>cellowalla</code> folder onto the box, for example with <code>scp -r cellowalla pi@raspberrypi.local:</code>, or with a USB stick.</li>
+  <li>On the box, run:
+    <pre>cd cellowalla
+sudo bash install/install.sh</pre>
+    The installer asks which mode you want and which port is which. It then installs Node.js, WireGuard, nftables and (for Gatekeeper) dnsmasq, and starts Cellowalla.</li>
+  <li>At the end it prints the box's address and a <b>setup code</b>. Write the code down. You need it once, to set the password.</li>
+</ol>
+<p>The installer is safe to run again. Use it to change mode, change ports or upgrade to a newer Cellowalla.</p>
+
+<h2 id="lookout-setup">Finishing Lookout setup</h2>
+<ol>
+  <li>Open your router's settings (often <code>192.168.1.1</code> or the router's app).</li>
+  <li><b>Give the box a fixed address.</b> Look for "DHCP reservation", "static lease" or "address reservation" and reserve the box's current address. This keeps it from changing.</li>
+  <li><b>Point DNS at the box.</b> In the router's DHCP or LAN settings, set the <i>DNS server</i> handed to devices to the box's address. Leave the second DNS empty, or devices will sometimes skip Shield.</li>
+  <li>Turn Wi-Fi off and on again on your phone (or wait a day) so devices pick up the new DNS.</li>
+  <li>Optional: in the dashboard under <b>Settings → Home names</b>, enter the router's address so local names like <code>printer.lan</code> keep working.</li>
+</ol>
+<p>Some internet-provider routers don't let you change DNS. Then either use Gatekeeper mode or set each device's DNS to the box by hand.</p>
+
+<h2 id="gatekeeper-setup">Finishing Gatekeeper setup</h2>
+<ol>
+  <li>Plug the box's <b>internet port</b> into the modem (or the provider's router).</li>
+  <li>Plug the box's <b>home port</b> into your Wi-Fi router's WAN/internet port, or into a switch.</li>
+  <li>Switch your Wi-Fi router to <b>access point</b> or <b>bridge</b> mode, so it only does Wi-Fi and lets the box hand out addresses. (Mesh systems call this "bridge mode".) If it can't, plug a cable from the box into one of the Wi-Fi router's normal LAN ports instead and turn its DHCP server off.</li>
+  <li>Devices now get addresses like <code>192.168.50.x</code> from the box. The dashboard is at <a href="https://cellowalla.lan">https://cellowalla.lan</a> or <code>https://192.168.50.1</code>.</li>
+</ol>
+<div class="note warn">If your provider's modem is also a router, you'll have "double NAT". Most things are fine with this. For the Tunnel you must forward the port on the provider's router to the box's internet-side address, or put the provider's router in bridge mode.</div>
+
+<h2 id="first">First sign-in</h2>
+<ol>
+  <li>On a phone or computer at home, open the address the installer printed (for example <code>https://192.168.1.50</code>).</li>
+  <li>Your browser will warn that the connection isn't private. That's expected: the box made its own certificate because it's only reachable from home. Choose <i>Advanced → Continue</i>.</li>
+  <li>Type the setup code and choose a password (10 characters or more).</li>
+  <li>Optional: use the browser's <i>Add to Home Screen</i> to get a Cellowalla icon on your phone.</li>
+</ol>
+<p>Forgot the password? On the box, run <code>sudo cellowalla-reset-password</code>. It clears the password and prints a new setup code.</p>
+
+<h2 id="home">Home screen</h2>
+<ul>
+  <li>The top card says whether your network is guarded. <b>Pause</b> turns Shield off for 5, 15 or 60 minutes when a site isn't working (House Rules keep working).</li>
+  <li>The tiles show look-ups and blocks in the last 24 hours, how many devices are online, and how many phones are connected through the Tunnel. Tap one to go to its screen.</li>
+  <li>The chart shows look-ups per hour; the colored part was blocked.</li>
+  <li><b>Most blocked</b> lists the names Shield stopped most often.</li>
+</ul>
+
+<h2 id="shield">Shield</h2>
+<ul>
+  <li><b>What to block for everyone:</b> switch categories on or off. <i>Ads &amp; trackers</i> and <i>Malware &amp; scams</i> start on. Lists update themselves every day; <b>Update lists now</b> does it straight away.</li>
+  <li><b>Clean Search</b> (for everyone). To use it only for the kids, leave this off and turn it on in their Crew.</li>
+  <li><b>Home address guard</b> stops a trick where an outside website gets your browser to talk to devices inside your home. Leave it on unless a service you use on purpose breaks.</li>
+  <li><b>Always block:</b> add any site, such as <code>example.com</code>. Everything under it is blocked too.</li>
+  <li><b>Never block:</b> if a website or app breaks, find what it looked up in the log, press <b>Allow</b>, and it's added here.</li>
+  <li><b>Your own lists:</b> paste the <code>https://</code> address of any public block list (hosts files, one-name-per-line lists, or <code>||name^</code> lists).</li>
+  <li><b>Look-up log:</b> the last few thousand look-ups. Search by name or show only blocked ones. Each row has an <b>Allow</b> or <b>Block</b> button.</li>
+  <li><b>Upstream:</b> where allowed look-ups go, encrypted. Cloudflare is the default; Quad9 also blocks malware on its side.</li>
+</ul>
+<p>Shield also blocks the private DNS servers built into some browsers and phones, so devices can't quietly skip it. If a device uses "Private DNS" or "Secure DNS", it falls back to normal DNS through Shield.</p>
+
+<h2 id="roster">Roster</h2>
+<p>Every device that uses the network appears here, with a green dot when it's online. Tap a device to:</p>
+<ul>
+  <li><b>Name</b> it ("Sam's iPad"). Cellowalla guesses from the device's own name or maker until you do.</li>
+  <li>Put it in a <b>Crew</b> so it follows that Crew's House Rules.</li>
+  <li><b>Pause the internet</b> for 30 minutes, 1 hour, 2 hours or until 7 am.</li>
+  <li><b>Block for good:</b> no internet at all until you unblock it.</li>
+  <li>See its <b>Look-ups</b>, and in Gatekeeper mode how much it downloaded and uploaded.</li>
+  <li><b>Forget</b> a device you got rid of.</li>
+</ul>
+<p>A maker of "Private address" means a phone that hides its real hardware address (iPhone and Android do this per Wi-Fi network). Name it once and it stays recognized on your network. If you turn the phone's private address setting to "rotating", it will look like a new device each time.</p>
+
+<h2 id="lobby">The Lobby</h2>
+<p>Turn on <b>Lobby</b> at the top of the Roster to make every new device wait without internet until you let it in. You get a Ping when one arrives; press <b>Let in</b> or <b>Block</b>. This is handy for guests' devices and anything plugged in without asking.</p>
+<p>In Gatekeeper mode the device is fully held back. In Lookout mode it just can't look up any names.</p>
+
+<h2 id="rules">House Rules and Crews</h2>
+<p>Household settings on the Shield screen apply to everyone. A Crew adds rules on top for its devices:</p>
+<ul>
+  <li><b>Devices:</b> tick the devices in this Crew. A device is in at most one Crew.</li>
+  <li><b>Also block:</b> extra categories just for this Crew, for example Adult, Social media and Gaming for a young child.</li>
+  <li><b>Clean Search</b> just for this Crew.</li>
+  <li><b>Extra sites to block</b>, one per line.</li>
+  <li><b>Bedtimes:</b> no internet between two times on the days you pick. Choose the day the bedtime <i>starts</i>. A Sunday-to-Thursday 21:00–07:00 bedtime covers school nights.</li>
+  <li><b>Pause</b> the whole Crew in one tap (dinner time!), or give <b>30 more minutes</b> during a bedtime.</li>
+</ul>
+<p>The box uses its own clock, so make sure its time zone is right (the installer asks).</p>
+
+<h2 id="tunnel">Tunnel (WireGuard)</h2>
+<p>The Tunnel lets your phone or laptop connect home from anywhere. Shield then protects it on café or hotel Wi-Fi and mobile data, and you can reach home devices such as a NAS or cameras.</p>
+<ol>
+  <li><b>Switch the Tunnel on.</b> Cellowalla fills in your home's public address. If your provider changes it now and then, use a free dynamic DNS name (for example from duckdns.org or your router's own DDNS) and type that name in <b>Home address</b>.</li>
+  <li><b>Forward the port.</b> In your router (or the provider's router), forward <b>UDP port 51820</b> to the box's address. In Gatekeeper mode the box is the router, so you only need this on the provider's router if it's also a router.</li>
+  <li><b>Make a pass</b> for each phone or laptop. Leave <i>Send all traffic home</i> on to have Shield everywhere; turn it off if you only want to reach home devices.</li>
+  <li>On the phone, install the free <b>WireGuard</b> app, tap <b>+ → Scan from QR code</b>, scan the code, and switch the tunnel on. On a laptop, use <b>Download file</b> and import it into WireGuard.</li>
+  <li>To test, turn the phone's Wi-Fi off (mobile data) and switch the tunnel on. The pass shows a green dot on the Tunnel screen.</li>
+</ol>
+<div class="note warn">A pass's QR code is a key to your home network. Don't share screenshots of it. If a phone is lost, remove its pass and that key stops working right away.</div>
+<p>Tunnel devices are listed in the Roster too, so you can put a teenager's phone in a Crew and have bedtimes follow it outside the house.</p>
+<p>Some networks (CGNAT, used by some mobile and fiber providers) don't give your home a public address at all. If the Tunnel never connects even though the port is forwarded, ask your provider for a public IPv4 address.</p>
+
+<h2 id="pings">Pings</h2>
+<p>The bell at the top shows Pings. To get them on your phone too:</p>
+<ol>
+  <li>Install the free <b>ntfy</b> app (Android or iPhone).</li>
+  <li>In the app, subscribe to a topic with a long random name that nobody could guess, for example <code>cellowalla-7f3k9q2xw</code>. Anyone who knows the name can read it.</li>
+  <li>In Cellowalla, open <b>Pings</b> and enter <code>https://ntfy.sh/</code> plus your topic name, then <b>Save</b> and <b>Send a test</b>.</li>
+  <li>Pick which events you want pushed.</li>
+</ol>
+<p>The webhook box sends each Ping as JSON to any address you choose, for example to connect it to a home automation system.</p>
+
+<h2 id="howto">Everyday how-tos</h2>
+<dl>
+  <dt><b>A website or app stopped working.</b></dt>
+  <dd>Shield → Open the log → search for part of the app's name → press <b>Allow</b> on the blocked rows. Or pause Shield for 5 minutes to check whether Shield is the cause.</dd>
+  <dt><b>Dinner's ready: phones off.</b></dt>
+  <dd>House Rules → the Crew → <b>Pause 30 min</b>. Or pause a single device from the Roster.</dd>
+  <dt><b>Who is this unknown device?</b></dt>
+  <dd>Tap it in the Roster: the maker, the name it calls itself, and its look-ups usually make it obvious (a TV looks up its maker's servers). If not, block it and see who complains.</dd>
+  <dt><b>Guests are coming.</b></dt>
+  <dd>Leave the Lobby on; let their devices in as they arrive. Forget them afterwards if you like.</dd>
+  <dt><b>Block one app everywhere, such as TikTok.</b></dt>
+  <dd>Turn on Social media for that Crew, or add <code>tiktok.com</code>, <code>tiktokv.com</code> and <code>tiktokcdn.com</code> to <i>Always block</i>.</dd>
+  <dt><b>See how much a device downloads.</b></dt>
+  <dd>Gatekeeper mode only: tap the device in the Roster.</dd>
+</dl>
+
+<h2 id="trouble">When something's wrong</h2>
+<dl>
+  <dt><b>Nothing loads anywhere.</b></dt>
+  <dd>Check the box has power and its light blinks. In Lookout mode you can set the router's DNS back to automatic to get online, then fix the box. On the box, <code>sudo systemctl status cellowalla</code> shows whether it's running and <code>sudo journalctl -u cellowalla -n 50</code> shows recent messages.</dd>
+  <dt><b>Ads still show on some sites.</b></dt>
+  <dd>Ads served from the same address as the content (such as YouTube video ads) can't be blocked by DNS without breaking the site. Also check the device uses the box: the device should appear in the Roster with look-ups.</dd>
+  <dt><b>A device isn't in the Roster.</b></dt>
+  <dd>In Lookout mode, it's probably not using the box for DNS (check the router's DNS setting, or the device's own DNS setting). Devices that have been asleep appear when they next use the network.</dd>
+  <dt><b>The Tunnel won't connect.</b></dt>
+  <dd>Check UDP 51820 is forwarded to the box, that <i>Home address</i> is right, and that the phone isn't on your home Wi-Fi when testing. If your home has no public address (CGNAT), the provider must give you one.</dd>
+  <dt><b>Browser says "not private".</b></dt>
+  <dd>Normal for the box's own certificate; it's only reachable inside your home and through the Tunnel.</dd>
+</dl>
+
+<h2 id="privacy">Privacy</h2>
+<ul>
+  <li>Everything stays on the box. Cellowalla has no cloud account and sends nothing to anyone except: allowed DNS look-ups to the upstream you chose (encrypted), daily block-list downloads, a one-time check of your public address when you switch the Tunnel on, and Pings to the ntfy or webhook address you set.</li>
+  <li>The look-up log lives only in the box's memory and is gone when it restarts. Only counts are kept.</li>
+  <li>The dashboard can only be opened from home or through the Tunnel, never from the internet.</li>
+  <li>Be fair with House Rules: tell your family what Cellowalla blocks and logs.</li>
+</ul>
+
+<h2 id="remove">Removing Cellowalla</h2>
+<p>On the box: <code>sudo bash install/uninstall.sh</code>. It stops Cellowalla, removes its firewall rules, DHCP settings and Tunnel, and leaves your settings in <code>/var/lib/cellowalla</code> (delete that folder too if you want them gone). Then set your router's DNS back to automatic (Lookout) or put the Wi-Fi router back on the modem (Gatekeeper).</p>
+
+</main>
+</body>
+</html>

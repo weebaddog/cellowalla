@@ -1,0 +1,46 @@
+name: cellowalla
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: node test/selftest.js
+
+  install:
+    # The real installer on a real Linux machine (lookout mode), then everything checked live.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          IF=$(ip route show default | awk '{print $5; exit}')
+          sudo CW_YES=1 CW_MODE=lookout CW_LAN="$IF" CW_TZ=UTC bash install/install.sh
+      - name: Shield, dashboard and Tunnel work
+        run: sudo bash .github/check-box.sh
+      - name: Gatekeeper firewall and DHCP settings pass the kernel's and dnsmasq's checks
+        run: |
+          sudo apt-get install -y -qq dnsmasq >/dev/null
+          sudo systemctl stop dnsmasq || true
+          sudo node .github/check-gatekeeper.mjs
+      - name: Re-running the installer is safe
+        run: |
+          IF=$(ip route show default | awk '{print $5; exit}')
+          sudo CW_YES=1 CW_MODE=lookout CW_LAN="$IF" CW_TZ=UTC bash install/install.sh
+          sleep 3; systemctl is-active cellowalla
+      - name: Uninstall
+        run: |
+          sudo bash install/uninstall.sh
+          ! systemctl is-active -q cellowalla
+          ! sudo nft list table inet cellowalla 2>/dev/null
+          ! ip link show cw0 2>/dev/null
+      - name: Logs
+        if: always()
+        run: sudo journalctl -u cellowalla --no-pager -n 200 || true
