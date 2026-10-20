@@ -1,9 +1,16 @@
-// Only the local setup page gets this (pick the box's address). The box's own pages get nothing.
+// The local setup page can pick the box's address. The box's dashboard can only say which theme
+// (Auto/Light/Dark) the person chose, so the app's own windows and menus match.
 const { contextBridge, ipcRenderer } = require("electron");
 
-if (location.protocol === "file:") {
+if (location.protocol !== "file:") {
+  contextBridge.exposeInMainWorld("cellowallaDesktop", {
+    themeChanged: (mode) => ipcRenderer.send("cellowalla:theme", String(mode)),
+  });
+} else {
   contextBridge.exposeInMainWorld("cellowallaDesktop", {
     connect: (address) => ipcRenderer.invoke("cellowalla:connect", address),
     current: () => ipcRenderer.invoke("cellowalla:current"),
+    theme: () => ipcRenderer.invoke("cellowalla:get-theme"),
+    themeChanged: (mode) => ipcRenderer.send("cellowalla:theme", String(mode)),
   });
 }

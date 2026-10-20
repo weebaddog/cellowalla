@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Cellowalla" parent="android:Theme.Material">
+        <item name="android:colorPrimary">#17201C</item>
+        <item name="android:colorPrimaryDark">#0E1412</item>
+        <item name="android:colorAccent">#3FC596</item>
+        <item name="android:statusBarColor">#0E1412</item>
+        <item name="android:windowBackground">#0E1412</item>
+    </style>
+</resources>

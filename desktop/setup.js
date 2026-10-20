@@ -7,4 +7,8 @@ document.getElementById("form").addEventListener("submit", async (e) => {
   const r = await window.cellowallaDesktop.connect(input.value.trim());
   if (r.error) document.getElementById("error").textContent = r.error;
 });
-for (const b of document.querySelectorAll(".chip")) b.addEventListener("click", () => { input.value = b.dataset.a; input.focus(); });
+const themeChips = document.querySelectorAll(".chip[data-theme]");
+const markTheme = (mode) => themeChips.forEach((c) => { c.classList.toggle("on", c.dataset.theme === mode); c.setAttribute("aria-checked", String(c.dataset.theme === mode)); });
+window.cellowallaDesktop.theme().then(markTheme);
+themeChips.forEach((c) => c.addEventListener("click", () => { window.cellowallaDesktop.themeChanged(c.dataset.theme); markTheme(c.dataset.theme); }));
+for (const b of document.querySelectorAll(".chip[data-a]")) b.addEventListener("click", () => { input.value = b.dataset.a; input.focus(); });

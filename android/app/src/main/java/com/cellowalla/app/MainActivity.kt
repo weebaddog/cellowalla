@@ -84,12 +84,12 @@ class MainActivity : Activity() {
         web?.destroy(); web = null
         actionBar?.title = "Cellowalla"
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(32), dp(24), dp(24)) }
-        col.addView(TextView(this).apply { text = "Connect to your Cellowalla box"; textSize = 22f; setTextColor(Color.rgb(21, 32, 27)) })
+        col.addView(TextView(this).apply { text = "Connect to your Cellowalla box"; textSize = 22f; setTextAppearance(android.R.style.TextAppearance_Material_Headline) })
         col.addView(TextView(this).apply {
             text = "Type the address the installer showed, for example 192.168.1.50, or cellowalla.lan if this phone already uses the box. You must be on your home Wi-Fi (or connected through the Tunnel)."
             setPadding(0, dp(8), 0, dp(16)); textSize = 15f
         })
-        if (error != null) col.addView(TextView(this).apply { text = error; setTextColor(Color.rgb(179, 38, 30)); setPadding(0, 0, 0, dp(12)) })
+        if (error != null) col.addView(TextView(this).apply { text = error; setTextColor(Color.rgb(229, 72, 63)); setPadding(0, 0, 0, dp(12)) })
         val input = EditText(this).apply {
             hint = "192.168.1.50"; setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
@@ -160,6 +160,10 @@ class MainActivity : Activity() {
                 }
             }
 
+            override fun onPageFinished(view: WebView, url: String) {
+                view.evaluateJavascript("window.cwSetTheme && window.cwSetTheme('$themeMode', true)", null) // the app's choice wins
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame && error.errorCode != ERROR_FAILED_SSL_HANDSHAKE) showSetup("Couldn't reach ${box.url} (${error.description}).")
             }
@@ -186,6 +190,42 @@ class MainActivity : Activity() {
             }
             runOnUiThread { startActivity(Intent.createChooser(send, "Add the Tunnel pass to WireGuard")) }
         }
+
+        /** The dashboard's own theme switch was used: the app's screens follow. */
+        @JavascriptInterface
+        fun themeChanged(mode: String) { runOnUiThread { applyTheme(mode, fromPage = true) } }
+    }
+
+    // ---- Light / Dark / Auto ----------------------------------------------------------------------
+    // One setting for the whole app: the title bar, the setup screen and the dashboard follow it.
+
+    private val themes = listOf("auto" to "Auto (follow the phone)", "light" to "Light", "dark" to "Dark")
+    private val themeMode: String get() = getSharedPreferences("ui", MODE_PRIVATE).getString("theme", "auto") ?: "auto"
+
+    private fun applyTheme(mode: String, fromPage: Boolean = false) {
+        val m = if (mode == "light" || mode == "dark") mode else "auto"
+        getSharedPreferences("ui", MODE_PRIVATE).edit().putString("theme", m).apply()
+        val native = {
+            if (Build.VERSION.SDK_INT >= 31) {
+                getSystemService(android.app.UiModeManager::class.java).setApplicationNightMode(when (m) {
+                    "light" -> android.app.UiModeManager.MODE_NIGHT_NO
+                    "dark" -> android.app.UiModeManager.MODE_NIGHT_YES
+                    else -> android.app.UiModeManager.MODE_NIGHT_AUTO
+                })
+            }
+        }
+        val w = web
+        // Tell the dashboard first (it saves the choice), then switch the app (which redraws the screen).
+        if (!fromPage && w != null) w.evaluateJavascript("window.cwSetTheme && window.cwSetTheme('$m', true)") { native() } else native()
+    }
+
+    private fun chooseTheme() {
+        val current = themes.indexOfFirst { it.first == themeMode }.coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Appearance")
+            .setSingleChoiceItems(themes.map { it.second }.toTypedArray(), current) { d, which -> d.dismiss(); applyTheme(themes[which].first) }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // ---- menu ----------------------------------------------------------------------------------------
@@ -194,6 +234,7 @@ class MainActivity : Activity() {
         menu.add(0, 1, 0, "Reload")
         menu.add(0, 2, 0, "Pause Shield 15 min")
         menu.add(0, 3, 0, "Resume Shield")
+        menu.add(0, 5, 0, "Appearance (light / dark)")
         menu.add(0, 4, 0, "Change box")
         return true
     }
@@ -204,6 +245,7 @@ class MainActivity : Activity() {
             2 -> pause(15)
             3 -> pause(0)
             4 -> { box.url = ""; box.pin = ""; showSetup(null) }
+            5 -> chooseTheme()
         }
         return true
     }

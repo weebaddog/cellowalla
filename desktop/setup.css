@@ -13,4 +13,6 @@ input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var
 input:focus { outline: 2px solid var(--brand); border-color: transparent; }
 button[type=submit] { font: inherit; font-weight: 600; background: var(--brand); color: var(--brand-ink); border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; }
 .chips { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+.chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.chips.theme { margin-top: 28px; }
 .chip { font: inherit; font-size: 13px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; cursor: pointer; }

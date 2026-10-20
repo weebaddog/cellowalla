@@ -4,7 +4,7 @@
 // The box makes its own certificate (it's only reachable at home), so the first connection asks
 // you to trust it, and from then on only that exact certificate is accepted.
 
-const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, session, shell, nativeImage } = require("electron");
+const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, session, shell, nativeImage, nativeTheme } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -33,7 +33,7 @@ function show() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1100, height: 780, minWidth: 380, minHeight: 500, icon: ICON, title: "Cellowalla", backgroundColor: "#0e1412", autoHideMenuBar: true,
+    width: 1100, height: 780, minWidth: 380, minHeight: 500, icon: ICON, title: "Cellowalla", backgroundColor: nativeTheme.shouldUseDarkColors ? "#0e1412" : "#f4f6f5", autoHideMenuBar: true,
     show: !process.argv.includes("--hidden"),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
@@ -51,8 +51,27 @@ function createWindow() {
   win.webContents.on("did-fail-load", (_e, code, desc, url, isMain) => {
     if (isMain && code !== -3) win.loadFile(path.join(__dirname, "setup.html"), { query: { error: `Couldn't reach ${config.box} (${desc}).`, box: config.box } });
   });
+  win.webContents.on("did-finish-load", () => pushTheme());
   if (config.box) win.loadURL(config.box); else win.loadFile(path.join(__dirname, "setup.html"));
 }
+
+// ---- Light / Dark / Auto ------------------------------------------------------------------------------
+// One setting for the whole app: the window frame, the setup page and the dashboard all follow it.
+
+const THEMES = { auto: "Auto (follow the system)", light: "Light", dark: "Dark" };
+
+function setTheme(mode, fromPage = false) {
+  if (!(mode in THEMES)) mode = "auto";
+  config.theme = mode; saveConfig();
+  nativeTheme.themeSource = mode === "auto" ? "system" : mode;
+  if (!fromPage) pushTheme();
+  buildMenu();
+}
+function pushTheme() {
+  win?.webContents.executeJavaScript(`window.cwSetTheme && window.cwSetTheme(${JSON.stringify(config.theme || "auto")}, true)`).catch(() => {});
+}
+ipcMain.on("cellowalla:theme", (_e, mode) => setTheme(mode, true));
+ipcMain.handle("cellowalla:get-theme", () => config.theme || "auto");
 
 // ---- the box's certificate (trust on first use) --------------------------------------------------
 
@@ -117,6 +136,7 @@ function buildMenu() {
     { label: "Pause Shield for 1 hour", enabled: signedIn, click: () => pause(60) },
     { label: "Resume Shield", enabled: signedIn, click: () => pause(0) },
     { type: "separator" },
+    { label: "Appearance", submenu: Object.entries(THEMES).map(([k, label]) => ({ label, type: "radio", checked: (config.theme || "auto") === k, click: () => setTheme(k) })) },
     { label: "Change box…", click: () => { config.box = ""; config.fingerprint = ""; saveConfig(); show(); win.loadFile(path.join(__dirname, "setup.html")); } },
     { label: "Start when I sign in", type: "checkbox", checked: !!config.autostart, click: (i) => setAutostart(i.checked) },
     { type: "separator" },
@@ -151,6 +171,7 @@ ipcMain.handle("cellowalla:current", () => config.box);
 app.whenReady().then(() => {
   if (process.platform === "win32") app.setAppUserModelId("com.cellowalla.desktop");
   trustBox();
+  nativeTheme.themeSource = config.theme === "light" || config.theme === "dark" ? config.theme : "system";
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   tray.setToolTip("Cellowalla");
   tray.on("click", show);

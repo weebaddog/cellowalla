@@ -153,12 +153,35 @@ function shell() {
   bell = h("button", { class: "iconbtn", "aria-label": "Pings", onclick: () => go("pings") }, "🔔");
   const top = h("header", { class: "top" },
     h("div", { class: "logo" }, h("img", { src: "icon.svg", alt: "" }), "Cellowalla"),
+    themeButton(),
     h("a", { class: "iconbtn", href: "guide.html", "aria-label": "User guide", title: "User guide" }, "?"),
     bell,
     h("button", { class: "iconbtn", "aria-label": "Settings", onclick: () => go("settings") }, "⚙"));
   const nav = h("nav", { class: "tabs" }, TABS.map(([k, ic, label]) => h("button", { "data-tab": k, onclick: () => go(k) }, h("span", { class: "ic", "aria-hidden": "true" }, ic), label)));
   root.replaceChildren(top, content, nav);
   go(ui.tab in SCREENS ? ui.tab : "home");
+}
+
+// ---- Light / Dark / Auto (theme.js does the work) -------------------------------------------------
+
+const THEMES = [["auto", "Auto", "◐"], ["light", "Light", "☀"], ["dark", "Dark", "☾"]];
+
+/** The header button: each press moves Auto → Light → Dark → Auto. */
+function themeButton() {
+  const b = h("button", { class: "iconbtn", onclick: () => { const i = THEMES.findIndex(([k]) => k === window.cwTheme()); window.cwSetTheme(THEMES[(i + 1) % 3][0]); } });
+  const show = () => { const t = THEMES.find(([k]) => k === window.cwTheme()) || THEMES[0]; b.textContent = t[2]; b.title = `Theme: ${t[1]} (tap to change)`; b.setAttribute("aria-label", b.title); };
+  document.addEventListener("cw-theme", show);
+  show();
+  return b;
+}
+
+/** Three choices, for Settings. */
+function themeChips() {
+  const row = h("div", { class: "chips", role: "radiogroup", "aria-label": "Theme" });
+  const draw = () => (row.isConnected || !row.childElementCount ? row : (document.removeEventListener("cw-theme", draw), null))?.replaceChildren(...THEMES.map(([k, label]) => h("button", { class: `chip${window.cwTheme() === k ? " on" : ""}`, role: "radio", "aria-checked": String(window.cwTheme() === k), onclick: () => window.cwSetTheme(k) }, label)));
+  document.addEventListener("cw-theme", draw);
+  draw();
+  return row;
 }
 
 function go(tab) {
@@ -566,6 +589,8 @@ async function settingsScreen() {
     s.mode === "lookout" ? h("div", { class: "card" }, h("h2", {}, "Home names"),
       h("p", { class: "muted" }, "If your router gives devices names like printer.lan, enter its address so those names keep working."),
       h("div", { class: "inline" }, homeDns, h("button", { class: "btn", onclick: () => act(() => api("PUT", "/api/settings", { homeDns: homeDns.value }), "Saved") }, "Save"))) : null,
+    h("div", { class: "card" }, h("h2", {}, "Appearance"),
+      h("p", { class: "muted" }, "Auto follows this device's own light or dark setting."), themeChips()),
     h("div", { class: "card" }, h("h2", {}, "Password"),
       h("label", { class: "field" }, h("span", {}, "Current password"), cur), h("label", { class: "field" }, h("span", {}, "New password (10+ characters)"), pw),
       h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => act(async () => { await api("POST", "/api/password", { current: cur.value, password: pw.value }); showAuth(true); }, "Password changed; sign in again") }, "Change password"))),
