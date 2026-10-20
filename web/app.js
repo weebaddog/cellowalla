@@ -585,9 +585,9 @@ function updatesCard(u) {
       : s.available ? `Cellowalla ${s.latest} is ready to install (this box has ${s.current}).`
       : s.checkedAt ? `Cellowalla ${s.current} is the newest version (checked ${ago(s.checkedAt)}).`
       : `This box has Cellowalla ${s.current}.`;
-    btns.replaceChildren(
+    btns.replaceChildren(...[
       h("button", { class: "btn", disabled: !!s.busy, onclick: () => act(async () => show(await api("POST", "/api/updates/check"))) }, "Check now"),
-      s.available && !s.busy ? h("button", { class: "btn primary", onclick: () => act(async () => show(await api("POST", "/api/updates/check", { install: true }))) }, `Update to ${s.latest}`) : null);
+      s.available && !s.busy ? h("button", { class: "btn primary", onclick: () => act(async () => show(await api("POST", "/api/updates/check", { install: true }))) }, `Update to ${s.latest}`) : null].filter(Boolean));
   };
   show(u);
   return h("div", { class: "card" }, h("h2", {}, "Box updates"),
@@ -610,9 +610,9 @@ function appUpdatesCard() {
       : s.error ? `Couldn't check for updates: ${s.error}`
       : s.last || (s.latest && s.latest !== s.current ? `Cellowalla ${s.latest} is out.` : `This app is Cellowalla ${s.current}.`);
     sw.replaceChildren(toggle(s.auto, async (v) => show(phone ? JSON.parse(phone.setAutoUpdate(v)) : await pc.setAutoUpdate(v)), "Update this app automatically"));
-    btns.replaceChildren(
+    btns.replaceChildren(...[
       h("button", { class: "btn", onclick: async () => { line.textContent = "Checking…"; if (phone) phone.checkUpdates(); else show(await pc.checkUpdates()); } }, "Check now"),
-      s.ready && pc ? h("button", { class: "btn primary", onclick: () => pc.installUpdate() }, "Restart to update") : null);
+      s.ready && pc ? h("button", { class: "btn primary", onclick: () => pc.installUpdate() }, "Restart to update") : null].filter(Boolean));
   };
   window.cwAppUpdates = (json) => { if (line.isConnected) show(JSON.parse(json)); };
   const card = h("div", { class: "card" }, h("h2", {}, "This app"),
