@@ -30,13 +30,13 @@ export function sendMail(cfg, subject, text) {
     sock.setTimeout(30_000, () => { sock.destroy(); reject(new Error("The mail server didn't answer")); });
     const from = cfg.from || cfg.user;
     const msg = [
-      `From: ${header("Cellovision")} <${from}>`, `To: <${cfg.to}>`, `Subject: ${header(subject)}`, `Date: ${new Date().toUTCString()}`,
-      `Message-ID: <${crypto.randomBytes(12).toString("hex")}@cellovision>`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8",
+      `From: ${header("Cellowalla")} <${from}>`, `To: <${cfg.to}>`, `Subject: ${header(subject)}`, `Date: ${new Date().toUTCString()}`,
+      `Message-ID: <${crypto.randomBytes(12).toString("hex")}@cellowalla>`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8",
       "Content-Transfer-Encoding: base64", "", wrap(b64(text)),
     ].join("\r\n");
     // Each step: what to send once the server answers with the expected code.
     const steps = [
-      [220, `EHLO ${os.hostname().replace(/[^A-Za-z0-9.-]/g, "") || "cellovision"}`], [250, "AUTH LOGIN"], [334, b64(cfg.user)], [334, b64(cfg.pass)],
+      [220, `EHLO ${os.hostname().replace(/[^A-Za-z0-9.-]/g, "") || "cellowalla"}`], [250, "AUTH LOGIN"], [334, b64(cfg.user)], [334, b64(cfg.pass)],
       [235, `MAIL FROM:<${from}>`], [250, `RCPT TO:<${cfg.to}>`], [250, "DATA"], [354, `${msg}\r\n.`], [250, "QUIT"],
     ];
     let buf = "", step = 0;

@@ -354,7 +354,9 @@ export function createWeb({ store, app, webDir, setupCode, log = console.log }) 
         if (store.data.admin) throw fail(409, "Already set up");
         if (tooMany(ip)) throw fail(429, "Too many tries; wait 15 minutes");
         const b = await readJson(req);
-        if (!setupCode || !crypto.timingSafeEqual(Buffer.from(String(b.code || "").trim().toUpperCase().padEnd(64)), Buffer.from(setupCode.padEnd(64)))) {
+        // Compare fixed-length hashes, so a too-long code can't make the lengths differ (which throws).
+        const codeHash = (s) => crypto.createHash("sha256").update(String(s || "").trim().toUpperCase()).digest();
+        if (!setupCode || !crypto.timingSafeEqual(codeHash(b.code), codeHash(setupCode))) {
           failures.get(ip).push(Date.now()); throw fail(403, "That setup code is wrong");
         }
         if (String(b.password || "").length < 10) throw fail(400, "Use at least 10 characters");
