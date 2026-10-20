@@ -11,3 +11,4 @@ android/keystore.properties
 *.keystore
 dist/
 desktop/dist-linux/
+desktop/dist-linux*/
