@@ -27,8 +27,8 @@ t "dashboard over https" bash -c "curl -sk https://127.0.0.1/api/hello | grep -q
 t "http redirects to https" is "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)" 301
 CODE=$(cat /var/lib/cellowalla/setup-code.txt)
 t "first-time setup" curl "${C[@]}" -o /dev/null -d "{\"code\":\"$CODE\",\"password\":\"ci-password-123\"}" https://127.0.0.1/api/setup
-OUT=$(curl "${C[@]}" -d '{"username":"ci","password":"wrong"}' https://127.0.0.1/api/cellocloud/login); t "CelloCloud: wrong password refused" grep -q '"code":"wrong_login"' <<<"$OUT"
-OUT=$(curl "${C[@]}" -d '{"username":"ci","password":"ci-cloud-password-1"}' https://127.0.0.1/api/cellocloud/login); t "CelloCloud sign-in" grep -q '"locked":false' <<<"$OUT"
+OUT=$(curl "${C[@]}" -d '{"username":"cibox","password":"wrong"}' https://127.0.0.1/api/cellocloud/login); t "CelloCloud: wrong password refused" grep -q '"code":"wrong_login"' <<<"$OUT"
+OUT=$(curl "${C[@]}" -d '{"username":"cibox","password":"ci-cloud-password-1"}' https://127.0.0.1/api/cellocloud/login); t "CelloCloud sign-in" grep -q '"locked":false' <<<"$OUT"
 t "CelloCloud token kept for root only" bash -c '[[ $(stat -c %a /var/lib/cellowalla/cellocloud.json) == 600 ]] && ! grep -q ci-cloud-password /var/lib/cellowalla/cellocloud.json'
 
 t "ads blocked" is "$(q @127.0.0.1 doubleclick.net A)" 0.0.0.0
